@@ -4,9 +4,10 @@
 // + one line in Build().
 //
 // Tamper-cache wiring (anti-lag design): Build() creates exactly ONE shared
-// *action.TamperCache and injects it (via action.NewTamperGate) into every
-// Defender-related tweak. A full probe over all Defender tweaks therefore spawns
-// Get-MpComputerStatus at most once per TTL, not once per tweak.
+// *action.TamperCache and injects it into every Defender-related action/gate. A
+// full probe over all Defender tweaks therefore spawns Get-MpComputerStatus at
+// most once per TTL, not once per tweak. The Defender suppression action uses it
+// only to scope its realtime-off sub-step (it never blocks the whole tweak).
 package catalog
 
 import (

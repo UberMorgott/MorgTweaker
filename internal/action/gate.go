@@ -36,6 +36,7 @@ type TamperCache struct {
 	fetchedAt time.Time
 	present   bool
 	tamperOn  bool
+	errored   bool // the LAST fetch's check genuinely errored (runner/cmdlet error)
 }
 
 // NewTamperCache builds a cache from a ctx-unaware runner (the common case for
@@ -63,10 +64,20 @@ func NewTamperCacheCtx(run psCtxRunner, ttl time.Duration) *TamperCache {
 // caller in a stale window pays the PowerShell cost; concurrent callers block on
 // the mutex and reuse the freshly cached value (single-flight via the mutex).
 func (c *TamperCache) Get(ctx core.ActionContext) (present, tamperOn bool) {
+	present, tamperOn, _ = c.GetState(ctx)
+	return present, tamperOn
+}
+
+// GetState is Get plus the errored bit: true when the LAST check genuinely errored
+// (the runner/cmdlet returned an error), as distinct from a successful check that
+// simply reports Defender absent. The TamperGate uses this to fail CLOSED on a real
+// check error (Tamper state unknown) while still reporting Absent for a clean
+// not-installed result. Same single-flight/TTL semantics as Get.
+func (c *TamperCache) GetState(ctx core.ActionContext) (present, tamperOn, errored bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.valid && time.Since(c.fetchedAt) < c.ttl {
-		return c.present, c.tamperOn
+		return c.present, c.tamperOn, c.errored
 	}
 	base := ctx.Ctx
 	if base == nil {
@@ -76,10 +87,10 @@ func (c *TamperCache) Get(ctx core.ActionContext) (present, tamperOn bool) {
 	defer cancel()
 	out, err := c.run(cctx, "powershell", "-NoProfile", "-NonInteractive", "-Command",
 		"Get-MpComputerStatus | Select-Object AMServiceEnabled,IsTamperProtected | ConvertTo-Json -Compress")
-	c.present, c.tamperOn = mpDetect(out, err)
+	c.present, c.tamperOn, c.errored = mpDetect(out, err)
 	c.valid = true
 	c.fetchedAt = time.Now()
-	return c.present, c.tamperOn
+	return c.present, c.tamperOn, c.errored
 }
 
 // Invalidate drops the cached value so the next Get re-probes (e.g. after an
@@ -92,10 +103,12 @@ func (c *TamperCache) Invalidate() {
 
 // TamperGate is the Defender precondition, reusable on any tweak whose registry
 // writes Defender's Tamper Protection would silently revert. It reports Absent
-// when the Defender cmdlet is unavailable (gutted build / non-Defender host),
-// Blocked when Tamper Protection is ON (with a deep-link to Windows Security so
-// the user can turn it off), and clears (ok=true, Off) only when TP is off. All
-// gates sharing a *TamperCache cause only one Get-MpComputerStatus per refresh.
+// when the check SUCCEEDS but Defender is not present (gutted build / non-Defender
+// host), Blocked when Tamper Protection is ON (with a deep-link to Windows Security
+// so the user can turn it off), Blocked when the check ERRORS (FIX 4: TP state
+// unknown → fail closed for this durable-disable gate, with a non-Tamper-asserting
+// message), and clears (ok=true, Off) only when TP is confirmed off. All gates
+// sharing a *TamperCache cause only one Get-MpComputerStatus per refresh.
 //
 // Detection reuses the v1 approach (internal/tweak/defender_status.go): the
 // Get-MpComputerStatus cmdlet's IsTamperProtected field. There is no reliable,
@@ -115,7 +128,20 @@ func (g TamperGate) Check(ctx core.ActionContext) (bool, core.Status, core.GateA
 	if c == nil {
 		c = NewTamperCache(nil, 5*time.Second)
 	}
-	present, tamperOn := c.Get(ctx)
+	present, tamperOn, errored := c.GetState(ctx)
+	if errored {
+		// FAIL CLOSED (FIX 4): the Tamper check genuinely errored, so TP state is
+		// UNKNOWN. For a durable-disable gate an unknown TP could silently revert our
+		// writes, so block — but do NOT assert TP is on (we don't know). The deep-link
+		// still points the user to where they can confirm/disable TP.
+		return false, core.StatusBlocked, core.GateAction{
+			Label: core.I18n{
+				RU: "Не удалось проверить состояние Tamper Protection — убедитесь, что оно отключено, в Безопасности Windows.",
+				EN: "Could not verify Tamper Protection state — make sure it is turned off in Windows Security.",
+			},
+			URL: "windowsdefender://threatsettings",
+		}
+	}
 	if !present {
 		return false, core.StatusAbsent, core.GateAction{}
 	}
@@ -131,14 +157,19 @@ func (g TamperGate) Check(ctx core.ActionContext) (bool, core.Status, core.GateA
 	return true, core.StatusOff, core.GateAction{}
 }
 
-// mpDetect parses Get-MpComputerStatus output into (present, tamperOn). It never
-// errors: any failure (cmdlet missing, empty output, parse error) means "not
-// present", so callers treat Defender as absent rather than guessing. Ported from
-// v1 queryDefender, plus tolerance for a 1-element array wrapper (PS sometimes
-// emits an array for a single object).
-func mpDetect(out []byte, err error) (present, tamperOn bool) {
-	if err != nil || len(out) == 0 {
-		return false, false
+// mpDetect parses Get-MpComputerStatus output into (present, tamperOn, errored).
+// errored is true ONLY when the runner returned a genuine error (the cmdlet failed
+// to run / is missing) — the case where Tamper state is truly UNKNOWN and a durable
+// gate must fail closed. A successful run that yields empty/unparseable output (no
+// runner error) is NOT errored: it reports not-present, so the caller treats
+// Defender as absent rather than guessing. Tolerates a 1-element array wrapper (PS
+// sometimes emits an array for a single object). Ported from v1 queryDefender.
+func mpDetect(out []byte, err error) (present, tamperOn, errored bool) {
+	if err != nil {
+		return false, false, true // genuine check error → state unknown
+	}
+	if len(out) == 0 {
+		return false, false, false // ran OK but no data → Defender absent
 	}
 	type mpRaw struct {
 		AMServiceEnabled  bool `json:"AMServiceEnabled"`
@@ -146,13 +177,13 @@ func mpDetect(out []byte, err error) (present, tamperOn bool) {
 	}
 	var obj mpRaw
 	if jerr := json.Unmarshal(out, &obj); jerr == nil {
-		return true, obj.IsTamperProtected
+		return true, obj.IsTamperProtected, false
 	}
 	var arr []mpRaw
 	if jerr := json.Unmarshal(out, &arr); jerr == nil && len(arr) > 0 {
-		return true, arr[0].IsTamperProtected
+		return true, arr[0].IsTamperProtected, false
 	}
-	return false, false
+	return false, false, false // ran OK but unparseable → treat as absent, not error
 }
 
 // realPSRunner invokes PowerShell bound to ctx so caller cancellation kills it;

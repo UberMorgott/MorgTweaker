@@ -463,6 +463,65 @@ func TestApplyOffVerifyAfterClean(t *testing.T) {
 	}
 }
 
+// --- FIX 1: verify-after skip for non-informative install probes ------------
+
+// installAction mimics action.DownloadInstall for verify-after purposes: when
+// skip==true it has no meaningful Detect, so Probe returns a constant PointOff and
+// it implements verifyAfterSkipper (the engine must NOT re-probe it). When
+// skip==false it carries a real Detect that, post-install, probes `probe`.
+type installAction struct {
+	skip  bool
+	probe core.PointState
+}
+
+func (installAction) Level() core.Elevation                { return core.ElevAdmin }
+func (installAction) Apply(core.ActionContext, bool) error { return nil }
+func (installAction) Snapshot(core.ActionContext) (core.Backup, error) {
+	return core.Backup{Existed: false}, nil
+}
+func (installAction) Restore(core.ActionContext, core.Backup) error { return nil }
+func (a installAction) Probe(core.ActionContext) (core.PointState, error) {
+	if a.skip {
+		return core.PointOff, nil // non-informative constant (Detect==nil)
+	}
+	return a.probe, nil
+}
+func (a installAction) SkipVerifyAfter() bool { return a.skip }
+
+// TestApplyVerifyAfterSkipsNonInformativeInstall: a successful install whose probe
+// is non-informative (Detect==nil → constant PointOff) must NOT be flagged Blocked
+// by verify-after. This is the vcredist false-block: the action declares
+// SkipVerifyAfter()==true, so the engine trusts Apply's exit code, not a re-probe.
+func TestApplyVerifyAfterSkipsNonInformativeInstall(t *testing.T) {
+	e := newTestEngine(nil, nil)
+	tw := core.Tweak{Actions: []core.Action{installAction{skip: true}}}
+	st, err := e.Apply(tw, true)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if st == core.StatusBlocked {
+		t.Fatal("install with non-informative probe must NOT be Blocked by verify-after")
+	}
+}
+
+// TestApplyVerifyAfterInstallWithDetectPasses: an install WITH a correct Detect
+// that probes On after a simulated successful install verifies cleanly (not
+// Blocked) — verify-after still runs for actions that opt in.
+func TestApplyVerifyAfterInstallWithDetectPasses(t *testing.T) {
+	e := newTestEngine(nil, nil)
+	tw := core.Tweak{Actions: []core.Action{installAction{skip: false, probe: core.PointOn}}}
+	st, err := e.Apply(tw, true)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if st == core.StatusBlocked {
+		t.Fatal("install whose Detect probes On after install must verify clean, not Blocked")
+	}
+	if st != core.StatusOn {
+		t.Errorf("install-with-Detect verify-after = %v want On", st)
+	}
+}
+
 // --- FIX 2: atomic / honest apply -------------------------------------------
 
 // TestApplyMidFailureRollsBackAndHonestStatus: a 2-action tweak where action0

@@ -28,13 +28,16 @@ type BatchStatusMsg struct {
 }
 
 // ApplyProgressMsg streams incremental progress for a long-running apply
-// (download/install). Pct is 0..100; Note is a short human label. (Streaming is
-// wired by the download_install action in a later task; the type is defined here
-// so the UI can switch on it now.)
+// (download/install). Pct is 0..100; Note is a short human label ("downloading"/
+// "installing"). Done/Total are the raw byte counters of a streaming download
+// (both 0 for a non-streaming report such as the install phase), so the UI can
+// render a determinate MB bar and derive transfer speed across successive ticks.
 type ApplyProgressMsg struct {
-	ID   string
-	Pct  int
-	Note string
+	ID    string
+	Pct   int
+	Note  string
+	Done  int64
+	Total int64
 }
 
 // ApplyDoneMsg is the terminal result of an apply: the re-probed Status and any
@@ -77,7 +80,7 @@ func (e *Engine) ProbeCmd(t core.Tweak) tea.Cmd {
 // is the progress sink reported through ActionContext (consumed by the
 // download_install action in a later task). The returned status is whatever
 // ApplyCtx re-probes — honest even on error.
-func (e *Engine) ApplyCmd(ctx context.Context, t core.Tweak, on bool, prog func(pct int, note string)) tea.Cmd {
+func (e *Engine) ApplyCmd(ctx context.Context, t core.Tweak, on bool, prog func(pct int, note string, done, total int64)) tea.Cmd {
 	return func() tea.Msg {
 		actx := core.ActionContext{Ctx: ctx, Progress: prog}
 		st, err := e.ApplyCtx(actx, t, on)

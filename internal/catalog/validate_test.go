@@ -3,7 +3,6 @@ package catalog
 import (
 	"strings"
 	"testing"
-	"time"
 
 	"golang.org/x/sys/windows/registry"
 
@@ -109,72 +108,37 @@ func TestKnownTweakRegValues(t *testing.T) {
 	}
 }
 
-// TestDefenderTweakGated proves the Defender tweak carries a non-nil gate and has
-// the expected number of action points (6 realtime reg.set + 6 service disables).
-func TestDefenderTweakGated(t *testing.T) {
+// TestDefenderTweakDurable proves the Defender tweak is the DURABLE, reversible
+// "off until re-enabled" toggle: a TamperGate (the durable service-key writes are
+// reverted by WdFilter while Tamper is on, so the whole tweak is hard-blocked),
+// TWO actions (immediate DefenderSuppress + durable DefenderServiceDisable),
+// TrustedInstaller elevation, and Reboot:true (full effect after one reboot).
+func TestDefenderTweakDurable(t *testing.T) {
 	tw, ok := Build().Find("prep.disable_defender")
 	if !ok {
 		t.Fatal("prep.disable_defender missing")
 	}
-	if tw.Gate == nil {
-		t.Error("Defender tweak must have a non-nil Gate")
+	if _, ok := tw.Gate.(action.TamperGate); !ok {
+		t.Errorf("Defender tweak must carry a TamperGate; got %T", tw.Gate)
 	}
-	if len(tw.Actions) != 12 {
-		t.Errorf("Defender tweak has %d actions, want 12 (6 reg + 6 svc)", len(tw.Actions))
+	if len(tw.Actions) != 2 {
+		t.Fatalf("Defender tweak has %d actions, want 2 (Suppress + ServiceDisable)", len(tw.Actions))
 	}
-}
-
-// TestDefenderGateUsesInjectedCache is the anti-lag invariant proved by pointer
-// identity: the Defender tweak's gate must wrap the EXACT *TamperCache passed into
-// its constructor (not a self-provisioned one), so a full probe over all Defender
-// tweaks spawns Get-MpComputerStatus once per TTL, not once per tweak.
-//
-// action.TamperGate is a comparable value whose only field is its *TamperCache
-// pointer, so gate == action.NewTamperGate(tc) holds iff the gate wraps tc. We
-// drive the internal defenderTweak(tc) with a KNOWN cache and assert that match —
-// proving the wiring with one tweak today and staying correct as more Defender
-// tweaks are added (they will all receive the same shared tc from Build()).
-func TestDefenderGateUsesInjectedCache(t *testing.T) {
-	tc := action.NewTamperCache(nil, 5*time.Second)
-
-	tw := defenderTweak(tc)
-	if tw.Gate == nil {
-		t.Fatal("Defender tweak has a nil gate")
+	if _, ok := tw.Actions[0].(action.DefenderSuppress); !ok {
+		t.Errorf("Defender action[0] is %T, want action.DefenderSuppress", tw.Actions[0])
 	}
-	tg, ok := tw.Gate.(action.TamperGate)
+	sd, ok := tw.Actions[1].(action.DefenderServiceDisable)
 	if !ok {
-		t.Fatalf("Defender gate is %T, want action.TamperGate", tw.Gate)
+		t.Fatalf("Defender action[1] is %T, want action.DefenderServiceDisable", tw.Actions[1])
 	}
-	if want := action.NewTamperGate(tc); tg != want {
-		t.Errorf("Defender gate %+v != NewTamperGate(injected tc) %+v — gate does not wrap the injected cache", tg, want)
+	if sd.Level() != core.ElevTrustedInstaller {
+		t.Errorf("DefenderServiceDisable elevation = %v, want ElevTrustedInstaller", sd.Level())
 	}
-
-	// Negative control: a gate built around a DIFFERENT cache must NOT compare
-	// equal, proving the equality above is real pointer identity, not a constant.
-	other := action.NewTamperCache(nil, 5*time.Second)
-	if tg == action.NewTamperGate(other) {
-		t.Error("Defender gate compares equal to a gate around an unrelated cache — pointer identity is not being tested")
+	if tw.Elevation != core.ElevTrustedInstaller {
+		t.Errorf("Defender tweak elevation = %v, want ElevTrustedInstaller", tw.Elevation)
 	}
-}
-
-// TestCatalogGatesAreTamperGates checks that every gated tweak Build() produces is
-// an action.TamperGate (so the per-tweak wiring above generalizes across the whole
-// assembled catalog as Defender tweaks are added).
-func TestCatalogGatesAreTamperGates(t *testing.T) {
-	gated := 0
-	for _, c := range Build() {
-		for _, tw := range c.Tweaks {
-			if tw.Gate == nil {
-				continue
-			}
-			if _, ok := tw.Gate.(action.TamperGate); !ok {
-				t.Errorf("tweak %q gate is %T, want action.TamperGate", tw.ID, tw.Gate)
-			}
-			gated++
-		}
-	}
-	if gated == 0 {
-		t.Fatal("no gated tweaks found in catalog")
+	if !tw.Reboot {
+		t.Error("durable Defender disable must require a reboot (Reboot:true)")
 	}
 }
 

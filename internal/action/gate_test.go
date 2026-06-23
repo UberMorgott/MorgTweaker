@@ -33,11 +33,20 @@ func TestTamperGateBlocksWhenTPOn(t *testing.T) {
 	}
 }
 
-func TestTamperGateAbsentWhenCmdletFails(t *testing.T) {
+// FIX 4: a genuine check ERROR (Tamper state unknown) must FAIL CLOSED → Blocked
+// for this durable-disable gate, NOT Absent. The block message must not assert TP
+// is on, and the deep-link is still offered so the user can confirm/disable TP.
+func TestTamperGateBlocksWhenCheckErrors(t *testing.T) {
 	g := gateWith(nil, errors.New("cmdlet failed"))
-	ok, st, _ := g.Check(core.ActionContext{})
-	if ok || st != core.StatusAbsent {
-		t.Errorf("cmdlet fail -> Check = %v,%v want false,Absent", ok, st)
+	ok, st, act := g.Check(core.ActionContext{})
+	if ok || st != core.StatusBlocked {
+		t.Errorf("check error -> Check = %v,%v want false,Blocked (fail closed)", ok, st)
+	}
+	if act.URL != "windowsdefender://threatsettings" {
+		t.Errorf("check-error block should keep the deep-link, got %q", act.URL)
+	}
+	if act.Label.RU == "" || act.Label.EN == "" {
+		t.Error("check-error block should be localized RU+EN")
 	}
 }
 
@@ -162,19 +171,32 @@ func TestTamperCacheHonorsCtxCancellation(t *testing.T) {
 	}
 }
 
-// mpDetect is now a pure parser over (out, err); mirrors v1 queryDefender semantics.
+// mpDetect is a pure parser over (out, err) → (present, tamperOn, errored);
+// mirrors v1 queryDefender semantics. FIX 4: errored distinguishes a genuine check
+// error (state unknown → fail closed) from a successful "Defender absent" result.
 func TestMpDetect(t *testing.T) {
-	present, tamperOn := mpDetect([]byte(`{"AMServiceEnabled":true,"IsTamperProtected":true}`), nil)
-	if !present || !tamperOn {
-		t.Errorf("mpDetect(TP on) = %v,%v want true,true", present, tamperOn)
+	present, tamperOn, errored := mpDetect([]byte(`{"AMServiceEnabled":true,"IsTamperProtected":true}`), nil)
+	if !present || !tamperOn || errored {
+		t.Errorf("mpDetect(TP on) = %v,%v,%v want true,true,false", present, tamperOn, errored)
 	}
-	present, _ = mpDetect(nil, errors.New("boom"))
-	if present {
-		t.Error("mpDetect on run error should report not present")
+	// genuine runner error → not present AND errored (state unknown).
+	present, _, errored = mpDetect(nil, errors.New("boom"))
+	if present || !errored {
+		t.Errorf("mpDetect(run error) = present=%v,errored=%v want false,true", present, errored)
 	}
-	present, tamperOn = mpDetect([]byte(`[{"IsTamperProtected":true}]`), nil)
-	if !present || !tamperOn {
-		t.Errorf("mpDetect(array) = %v,%v want true,true", present, tamperOn)
+	// successful run, empty output → not present but NOT errored (Defender absent).
+	present, _, errored = mpDetect(nil, nil)
+	if present || errored {
+		t.Errorf("mpDetect(empty,no-err) = present=%v,errored=%v want false,false (absent, not error)", present, errored)
+	}
+	// successful run, unparseable output → absent, not errored.
+	present, _, errored = mpDetect([]byte("not json"), nil)
+	if present || errored {
+		t.Errorf("mpDetect(bad json,no-err) = present=%v,errored=%v want false,false", present, errored)
+	}
+	present, tamperOn, errored = mpDetect([]byte(`[{"IsTamperProtected":true}]`), nil)
+	if !present || !tamperOn || errored {
+		t.Errorf("mpDetect(array) = %v,%v,%v want true,true,false", present, tamperOn, errored)
 	}
 }
 

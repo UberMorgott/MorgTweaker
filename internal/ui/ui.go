@@ -10,6 +10,7 @@ package ui
 
 import (
 	"context"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -24,6 +25,16 @@ type pane int
 const (
 	paneLeft pane = iota
 	paneRight
+)
+
+// screen is the top-level view mode. screenList (the default zero value) is the
+// two-pane master-detail list; screenProgress REPLACES it with the apply/rollback
+// progress screen (three stacked bars) for the lifetime of a batch, then reverts.
+type screen int
+
+const (
+	screenList screen = iota
+	screenProgress
 )
 
 // model is the Bubble Tea model.
@@ -51,6 +62,10 @@ type model struct {
 	progress map[string]engine.ApplyProgressMsg
 	// cancel holds the cancel func for an in-flight apply per tweak ID.
 	cancel map[string]context.CancelFunc
+	// selected is the user's own per-row checkbox state, decoupled from the probed
+	// status: every tweak starts unchecked (missing entry = false) and a toggle/
+	// click flips it. This — NOT core.Status — drives the checkbox glyph fill.
+	selected map[string]bool
 
 	activePane pane
 
@@ -64,7 +79,52 @@ type model struct {
 
 	status    string
 	statusErr bool
+
+	// version is the product version shown in the window-frame title (e.g.
+	// "1.0.0"). Set by Run from the embedded versioninfo.json; empty in tests/
+	// direct New() callers, where the title falls back to "dev".
+	version string
+
+	// batch drives the SEQUENTIAL apply/rollback of all CHECKED rows triggered by
+	// the bottom bar. batchKind is the active operation (none/apply/rollback);
+	// batchQueue holds the tweak IDs still to process (head dispatched next). One
+	// item is in flight at a time — its Done message advances the queue.
+	batchKind  int
+	batchQueue []string
+
+	// --- progress screen state (valid while m.screen == screenProgress) --------
+	//
+	// screen selects the list vs the progress view. The progress screen reads ONLY
+	// these cached fields (never any I/O), all fed from messages handled in Update.
+	screen screen
+
+	// batchTotal is the number of tweaks the active batch started with (drives the
+	// OVERALL bar, which is shown only when batchTotal > 1). batchDone counts the
+	// tweaks finished so far; batchFailed counts those that errored (for the
+	// return-to-list summary line).
+	batchTotal  int
+	batchDone   int
+	batchFailed int
+
+	// currentID is the tweak whose apply/rollback is in flight (the CURRENT-TWEAK
+	// bar's subject); "" between items and once the batch ends.
+	currentID string
+
+	// download speed derivation: dlSpeed is the latest transfer rate in bytes/sec,
+	// computed in Update from the byte delta between successive download ticks
+	// (dlLastDone bytes at dlLastTime). View only reads dlSpeed — it never calls
+	// time.Now, staying pure.
+	dlSpeed    float64
+	dlLastDone int64
+	dlLastTime time.Time
 }
+
+// batch operation kinds for model.batchKind.
+const (
+	batchNone = iota
+	batchApply
+	batchRollback
+)
 
 // New builds the model. eng must be non-nil; pass engine.New(nil) for a
 // probe-only engine (apply works, rollback reports backup-disabled).
@@ -78,6 +138,7 @@ func New(catalog core.Catalog, eng *engine.Engine) model {
 		probing:  map[string]bool{},
 		progress: map[string]engine.ApplyProgressMsg{},
 		cancel:   map[string]context.CancelFunc{},
+		selected: map[string]bool{},
 		prog:     new(*tea.Program),
 	}
 }
@@ -138,8 +199,9 @@ func (m model) statusOf(id string) core.Status { return m.statuses[id] }
 // Run launches the TUI program. Alt-screen + mouse are per-View fields (v2).
 // The constructed model's prog slot is filled with the running *tea.Program so a
 // long-running apply can Send streamed ApplyProgressMsg back into the loop.
-func Run(catalog core.Catalog, eng *engine.Engine) error {
+func Run(catalog core.Catalog, eng *engine.Engine, version string) error {
 	m := New(catalog, eng)
+	m.version = version
 	p := tea.NewProgram(m)
 	*m.prog = p // model is value-copied into the program, but the slot is shared
 	_, err := p.Run()

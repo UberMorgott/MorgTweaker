@@ -83,15 +83,22 @@ type Backup struct {
 }
 
 // ActionContext threads cancellation and a progress sink into action methods.
+//
+// Progress carries, besides the coarse pct (0..100) and a short note ("downloading"
+// /"installing"), the raw byte counters of a streaming download (done/total). They
+// are 0 for non-streaming reports (e.g. a registry write or the "installing"
+// phase), letting a UI show a determinate MB bar + derive speed only when real
+// byte counts flow.
 type ActionContext struct {
 	Ctx      context.Context
-	Progress func(pct int, note string) // nil for non-async actions
+	Progress func(pct int, note string, done, total int64) // nil for non-async actions
 }
 
-// Report forwards progress if a sink is set (nil-safe).
-func (c ActionContext) Report(pct int, note string) {
+// Report forwards progress if a sink is set (nil-safe). done/total are the raw
+// byte counters of a streaming download (0 when not applicable).
+func (c ActionContext) Report(pct int, note string, done, total int64) {
 	if c.Progress != nil {
-		c.Progress(pct, note)
+		c.Progress(pct, note, done, total)
 	}
 }
 

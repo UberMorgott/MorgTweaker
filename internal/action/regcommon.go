@@ -25,10 +25,35 @@ const (
 const queryAccess = registry.QUERY_VALUE | registry.WOW64_64KEY
 const writeAccess = registry.QUERY_VALUE | registry.SET_VALUE | registry.WOW64_64KEY
 
-// readRaw returns the current (existed, type, value) of the target value.
-// existed==false when either the key or the value is missing.
+// RegView selects which registry view (WOW64 redirection) a read/write targets.
+// The zero value is the 64-bit view, preserving every existing call site's
+// behavior; ViewWow6432 forces the 32-bit (WOW6432Node) view, needed e.g. to
+// detect the VC++ x86 runtime, which registers ONLY under the 32-bit view.
+type RegView int
+
+const (
+	ViewDefault64 RegView = iota // 64-bit view (registry.WOW64_64KEY)
+	ViewWow6432                  // 32-bit view (registry.WOW64_32KEY / WOW6432Node)
+)
+
+// wow64Flag maps a RegView to the WOW64 access bit OR-ed into the open mask.
+func (v RegView) wow64Flag() uint32 {
+	if v == ViewWow6432 {
+		return registry.WOW64_32KEY
+	}
+	return registry.WOW64_64KEY
+}
+
+// readRaw returns the current (existed, type, value) of the target value in the
+// 64-bit view. existed==false when either the key or the value is missing.
 func readRaw(root registry.Key, path, value string, kind ValueKind) (existed bool, regType uint32, v any, err error) {
-	k, err := registry.OpenKey(root, path, queryAccess)
+	return readRawView(root, path, value, kind, ViewDefault64)
+}
+
+// readRawView is readRaw with an explicit registry view (64-bit vs WOW6432Node).
+func readRawView(root registry.Key, path, value string, kind ValueKind, view RegView) (existed bool, regType uint32, v any, err error) {
+	access := registry.QUERY_VALUE | view.wow64Flag()
+	k, err := registry.OpenKey(root, path, access)
 	if err != nil {
 		if errors.Is(err, registry.ErrNotExist) {
 			return false, 0, nil, nil
@@ -60,9 +85,16 @@ func readRaw(root registry.Key, path, value string, kind ValueKind) (existed boo
 	}
 }
 
-// writeRaw creates the key path if needed and sets the value per kind.
+// writeRaw creates the key path if needed and sets the value per kind in the
+// 64-bit view.
 func writeRaw(root registry.Key, path, value string, kind ValueKind, v any) error {
-	k, _, err := registry.CreateKey(root, path, writeAccess)
+	return writeRawView(root, path, value, kind, v, ViewDefault64)
+}
+
+// writeRawView is writeRaw with an explicit registry view.
+func writeRawView(root registry.Key, path, value string, kind ValueKind, v any, view RegView) error {
+	access := registry.QUERY_VALUE | registry.SET_VALUE | view.wow64Flag()
+	k, _, err := registry.CreateKey(root, path, access)
 	if err != nil {
 		return err
 	}
@@ -97,9 +129,16 @@ func writeRaw(root registry.Key, path, value string, kind ValueKind, v any) erro
 	}
 }
 
-// deleteRaw removes the value; a missing key/value is not an error.
+// deleteRaw removes the value in the 64-bit view; a missing key/value is not an
+// error.
 func deleteRaw(root registry.Key, path, value string) error {
-	k, err := registry.OpenKey(root, path, writeAccess)
+	return deleteRawView(root, path, value, ViewDefault64)
+}
+
+// deleteRawView is deleteRaw with an explicit registry view.
+func deleteRawView(root registry.Key, path, value string, view RegView) error {
+	access := registry.QUERY_VALUE | registry.SET_VALUE | view.wow64Flag()
+	k, err := registry.OpenKey(root, path, access)
 	if err != nil {
 		if errors.Is(err, registry.ErrNotExist) {
 			return nil

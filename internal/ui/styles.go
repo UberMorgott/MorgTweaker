@@ -65,10 +65,30 @@ var (
 	// Admin badge.
 	adminOnStyle  = lipgloss.NewStyle().Foreground(accentLime).Bold(true)
 	adminOffStyle = lipgloss.NewStyle().Foreground(warnAmber).Bold(true)
+
+	// Bottom button-bar buttons. The primary action (Apply) gets the loud lime
+	// fill; the rest are bordered lime text so the whole bar reads as a footer.
+	btnPrimaryStyle = lipgloss.NewStyle().Foreground(inkDark).Background(accentBright).Bold(true)
+	btnStyle        = lipgloss.NewStyle().Foreground(accentLime).Bold(true)
+
+	// Progress-screen bars: bright lime for the filled run, dim green for the empty
+	// track, light text for captions, and a muted caption for secondary detail.
+	barFillStyle    = lipgloss.NewStyle().Foreground(accentBright).Bold(true)
+	barTrackStyle   = lipgloss.NewStyle().Foreground(accentDim)
+	barCaptionStyle = lipgloss.NewStyle().Foreground(inkLight).Bold(true)
+	barDetailStyle  = lipgloss.NewStyle().Foreground(gray)
 )
 
-// checkbox glyphs.
+// progress-bar block runes: a full block for the filled run, a light shade for the
+// empty track — both single display-width so the bar width math stays exact.
 const (
-	glyphOn  = "▣"
-	glyphOff = "☐"
+	barFillRune  = "█"
+	barTrackRune = "░"
+)
+
+// checkbox glyphs — ASCII so every cell is single-display-width and uniform
+// across rows (no East-Asian-width / variation-selector ambiguity).
+const (
+	glyphOn  = "[x]"
+	glyphOff = "[ ]"
 )

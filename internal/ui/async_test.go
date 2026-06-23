@@ -3,6 +3,7 @@ package ui
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -10,6 +11,79 @@ import (
 	"morgtweaker/internal/core"
 	"morgtweaker/internal/engine"
 )
+
+// tamperGateStub is a fake Gate that yields a Tamper-style deep-link, modeling the
+// Defender tweak's gate when Tamper Protection is ON.
+type tamperGateStub struct{}
+
+func (tamperGateStub) Check(core.ActionContext) (bool, core.Status, core.GateAction) {
+	return false, core.StatusBlocked, core.GateAction{URL: "windowsdefender://threatsettings"}
+}
+
+// noURLGateStub is a fake Gate present on a tweak but yielding NO deep-link (URL
+// empty) — e.g. a gate that currently passes; a StatusBlocked here came from
+// verify-after / access-denied, not the gate, so the UI must show generic wording.
+type noURLGateStub struct{}
+
+func (noURLGateStub) Check(core.ActionContext) (bool, core.Status, core.GateAction) {
+	return true, core.StatusOff, core.GateAction{}
+}
+
+// blockedCat is a catalog with three blockable rows: one gated with a Tamper
+// deep-link, one with a gate that offers no URL, and one with no gate at all.
+func blockedCat() core.Catalog {
+	return core.Catalog{
+		{ID: "prep", Name: core.I18n{RU: "Подготовка", EN: "Prep"}, Tweaks: []core.Tweak{
+			{ID: "prep.tamper", Name: core.I18n{RU: "Т", EN: "T"}, Desc: core.I18n{RU: "д", EN: "d"}, Gate: tamperGateStub{}},
+			{ID: "prep.nourl", Name: core.I18n{RU: "Н", EN: "N"}, Desc: core.I18n{RU: "д", EN: "d"}, Gate: noURLGateStub{}},
+			{ID: "prep.nogate", Name: core.I18n{RU: "Г", EN: "G"}, Desc: core.I18n{RU: "д", EN: "d"}},
+		}},
+	}
+}
+
+// TestBlockedMessageTamperVsGeneric is the BUG-2 fix: a StatusBlocked carrying a
+// real Tamper GateAction (URL present) shows the "Tamper Protection / press o"
+// wording; a StatusBlocked WITHOUT a gate deep-link (verify-after on vcredist,
+// access-denied) shows the generic wording and never advertises 'o'.
+func TestBlockedMessageTamperVsGeneric(t *testing.T) {
+	cases := []struct {
+		id          string
+		wantTamper  bool // expect the Tamper deep-link wording
+		wantGeneric bool // expect the generic wording
+	}{
+		{"prep.tamper", true, false}, // gate yields a URL → Tamper wording + 'o'
+		{"prep.nourl", false, true},  // gate but no URL → generic, no 'o'
+		{"prep.nogate", false, true}, // no gate → generic, no 'o'
+	}
+	for _, lang := range []Lang{LangEN, LangRU} {
+		for _, c := range cases {
+			m := New(blockedCat(), engine.New(nil))
+			m.lang = lang
+			updated, _ := m.Update(engine.ApplyDoneMsg{ID: c.id, Status: core.StatusBlocked})
+			got := updated.(model).status
+			if !updated.(model).statusErr {
+				t.Errorf("[%v %s] blocked must set statusErr", lang, c.id)
+			}
+			tamperWording := T(lang, kMsgBlocked)
+			// The Tamper wording mentions Tamper + the 'o' deep-link; the generic does not.
+			mentionsTamper := strings.Contains(got, "Tamper")
+			if c.wantTamper {
+				if !mentionsTamper {
+					t.Errorf("[%v %s] status %q should use Tamper wording %q", lang, c.id, got, tamperWording)
+				}
+			}
+			if c.wantGeneric {
+				if mentionsTamper {
+					t.Errorf("[%v %s] status %q must NOT mention Tamper Protection (block had no gate deep-link)", lang, c.id, got)
+				}
+				// generic wording carries no 'press o' / 'Нажми o' hint
+				if strings.Contains(strings.ToLower(got), "press o") || strings.Contains(got, "Нажми o") {
+					t.Errorf("[%v %s] generic block status %q must NOT advertise the 'o' deep-link", lang, c.id, got)
+				}
+			}
+		}
+	}
+}
 
 // escKey builds the Esc key-press message (its String() is "esc").
 func escKey() tea.KeyPressMsg { return tea.KeyPressMsg{Code: tea.KeyEscape} }
@@ -124,41 +198,43 @@ func TestUpdateApplyProgressIgnoredWhenNotInflight(t *testing.T) {
 	}
 }
 
-// TestDispatchApplyDebounce (FIX A): a second apply dispatch for a tweak that is
-// already in flight is a no-op — it returns a nil Cmd and does not overwrite the
-// existing cancel func (which would leak the live context).
-func TestDispatchApplyDebounce(t *testing.T) {
+// TestApplySelectedDebounce (FIX A, re-pointed): the apply-selected batch path
+// dispatches the first checked appliable tweak; a second applySelected while the
+// batch is in flight is a no-op (nil Cmd) and does not overwrite the cancel func.
+func TestApplySelectedDebounce(t *testing.T) {
 	m := New(twoCat(), engine.New(nil))
 	m.activePane = paneRight
 	m.statuses["prep.x"] = core.StatusOff
+	m.selected["prep.x"] = true // checked + appliable → in the batch
 
-	// First dispatch: registers a cancel func and an ApplyCmd.
-	gm1, cmd1 := m.toggleCurrent()
+	// First batch dispatch: registers a cancel func and an ApplyCmd.
+	gm1, cmd1 := m.applySelected()
 	if cmd1 == nil {
-		t.Fatal("first dispatch should return an ApplyCmd")
+		t.Fatal("applySelected should dispatch an ApplyCmd for the checked row")
 	}
 	cancel1, ok := gm1.cancel["prep.x"]
 	if !ok {
-		t.Fatal("first dispatch should register a cancel func")
+		t.Fatal("applySelected should register a cancel func")
 	}
 
-	// Second dispatch while in flight: must be a no-op (nil Cmd, same cancel).
-	gm2, cmd2 := gm1.toggleCurrent()
+	// Second applySelected while the batch is running: no-op (nil Cmd, same cancel).
+	gm2, cmd2 := gm1.applySelected()
 	if cmd2 != nil {
-		t.Error("second dispatch while in flight should be debounced (nil Cmd)")
+		t.Error("applySelected while a batch is in flight should be debounced (nil Cmd)")
 	}
 	if got := gm2.cancel["prep.x"]; fmt.Sprintf("%p", got) != fmt.Sprintf("%p", cancel1) {
-		t.Error("second dispatch must not overwrite the in-flight cancel func")
+		t.Error("second applySelected must not overwrite the in-flight cancel func")
 	}
 }
 
-// TestEscCancelsFocusedApply (FIX D): esc cancels the focused tweak's in-flight
-// apply (clearing its working markers) without quitting the app.
-func TestEscCancelsFocusedApply(t *testing.T) {
+// TestEscCancelsInflightApply (FIX D, re-pointed): esc cancels the in-flight apply
+// (the batch's current item) and clears its working markers without quitting.
+func TestEscCancelsInflightApply(t *testing.T) {
 	m := New(twoCat(), engine.New(nil))
 	m.activePane = paneRight
 	m.statuses["prep.x"] = core.StatusOff
-	gm, _ := m.toggleCurrent()
+	m.selected["prep.x"] = true
+	gm, _ := m.applySelected()
 	gm.progress["prep.x"] = engine.ApplyProgressMsg{ID: "prep.x", Pct: 10}
 
 	out, cmd := gm.onKey(escKey())
@@ -167,13 +243,40 @@ func TestEscCancelsFocusedApply(t *testing.T) {
 		t.Error("esc must not quit the app (nil Cmd expected)")
 	}
 	if _, ok := got.cancel["prep.x"]; ok {
-		t.Error("esc should cancel and remove the focused tweak's cancel func")
+		t.Error("esc should cancel and remove the in-flight tweak's cancel func")
 	}
 	if got.probing["prep.x"] {
 		t.Error("esc should clear the probing marker")
 	}
 	if _, ok := got.progress["prep.x"]; ok {
 		t.Error("esc should clear the progress entry")
+	}
+}
+
+// TestApplySelectedSkipsNonAppliable: only CHECKED + appliable rows enter the
+// batch; a checked-but-already-applied row is ignored by apply-selected.
+func TestApplySelectedSkipsNonAppliable(t *testing.T) {
+	m := New(twoCat(), engine.New(nil))
+	m.statuses["prep.x"] = core.StatusOn // applied → not appliable
+	m.selected["prep.x"] = true
+	_, cmd := m.applySelected()
+	if cmd != nil {
+		t.Error("applySelected must skip checked rows that are not appliable")
+	}
+}
+
+// TestRollbackSelectedDispatches: rollback-selected dispatches a rollback for a
+// CHECKED + applied (rollbackable) row.
+func TestRollbackSelectedDispatches(t *testing.T) {
+	m := New(twoCat(), engine.New(nil))
+	m.statuses["prep.x"] = core.StatusOn // applied → rollbackable
+	m.selected["prep.x"] = true
+	gm, cmd := m.rollbackSelected()
+	if cmd == nil {
+		t.Fatal("rollbackSelected should dispatch a rollback for the checked applied row")
+	}
+	if gm.batchKind != batchRollback {
+		t.Errorf("rollbackSelected should set batchKind=batchRollback, got %d", gm.batchKind)
 	}
 }
 
@@ -260,14 +363,38 @@ func TestInitDispatchesBatchProbe(t *testing.T) {
 	}
 }
 
-// TestToggleUsesCachedStatus: toggling a tweak whose cached status is On dispatches
-// an apply (returns a Cmd) when no admin is required.
-func TestToggleDispatchesApply(t *testing.T) {
+// TestToggleSelectsOnly: in the select-then-act model, toggleCurrent SELECTS ONLY
+// — it flips m.selected and dispatches NOTHING (nil Cmd). A second toggle clears it.
+func TestToggleSelectsOnly(t *testing.T) {
 	m := New(twoCat(), engine.New(nil))
 	m.activePane = paneRight
-	m.statuses["prep.x"] = core.StatusOff
-	_, cmd := m.toggleCurrent()
-	if cmd == nil {
-		t.Error("toggleCurrent on a non-admin tweak should dispatch an ApplyCmd")
+	m.statuses["prep.x"] = core.StatusOff // appliable → has a checkbox
+
+	got, cmd := m.toggleCurrent()
+	if cmd != nil {
+		t.Error("toggleCurrent must NOT dispatch (select-only); want nil Cmd")
+	}
+	if !got.selected["prep.x"] {
+		t.Error("toggleCurrent should check (select) the row")
+	}
+
+	got2, cmd2 := got.toggleCurrent()
+	if cmd2 != nil {
+		t.Error("second toggle must also be select-only (nil Cmd)")
+	}
+	if got2.selected["prep.x"] {
+		t.Error("second toggle should uncheck (deselect) the row")
+	}
+}
+
+// TestToggleSkipsActionlessRows: a hard-blocked / unavailable row has no checkbox,
+// so toggleCurrent cannot select it.
+func TestToggleSkipsActionlessRows(t *testing.T) {
+	m := New(twoCat(), engine.New(nil))
+	m.activePane = paneRight
+	m.statuses["prep.x"] = core.StatusBlocked
+	got, _ := m.toggleCurrent()
+	if got.selected["prep.x"] {
+		t.Error("a no-action (blocked) row must not be selectable")
 	}
 }

@@ -47,7 +47,7 @@ func TestTweakNeedsAdmin(t *testing.T) {
 }
 
 func TestActionContextReportNilSafe(t *testing.T) {
-	ActionContext{}.Report(50, "half") // must not panic with nil Progress
+	ActionContext{}.Report(50, "half", 0, 0) // must not panic with nil Progress
 }
 
 func TestCatalogFind(t *testing.T) {

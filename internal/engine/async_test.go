@@ -86,7 +86,7 @@ func TestApplyCmdWiresProgressSink(t *testing.T) {
 	e := newTestEngine(nil, nil)
 	var gotPct int
 	var gotNote string
-	prog := func(pct int, note string) { gotPct, gotNote = pct, note }
+	prog := func(pct int, note string, _, _ int64) { gotPct, gotNote = pct, note }
 	tw := core.Tweak{ID: "pg", Actions: []core.Action{progressAction{}}}
 	cmd := e.ApplyCmd(context.Background(), tw, true, prog)
 	if _, ok := cmd().(ApplyDoneMsg); !ok {
@@ -103,7 +103,7 @@ type progressAction struct{}
 
 func (progressAction) Level() core.Elevation { return core.ElevUser }
 func (progressAction) Apply(ctx core.ActionContext, _ bool) error {
-	ctx.Report(42, "half")
+	ctx.Report(42, "half", 0, 0)
 	return nil
 }
 func (progressAction) Snapshot(core.ActionContext) (core.Backup, error) {

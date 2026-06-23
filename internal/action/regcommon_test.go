@@ -86,6 +86,43 @@ func TestRegSetStringRoundTrip(t *testing.T) {
 	}
 }
 
+// TestRegSetViewWow6432RoundTrip exercises the BUG-1 seam: a RegSet pinned to the
+// 32-bit (WOW6432Node) view reads/writes through readRawView/writeRawView with the
+// WOW64_32KEY flag and round-trips correctly. This is the path the VC++ x86 runtime
+// detector relies on (the x86 Installed flag exists ONLY in the 32-bit view); the
+// old detector read x86 in the 64-bit view and saw it absent. The HKCU test path is
+// not WOW64-redirected, so the value is reachable through the pinned view.
+func TestRegSetViewWow6432RoundTrip(t *testing.T) {
+	path := testKey(t)
+	a := RegSet{
+		Root: registry.CURRENT_USER, Path: path, Value: "Installed",
+		Kind: KindDword, On: uint64(1), Off: uint64(0), Elev: core.ElevUser,
+		View: ViewWow6432,
+	}
+	ctx := core.ActionContext{}
+
+	// A fresh value is absent → the detector must read PointOff, NOT error.
+	if ps, err := a.Probe(ctx); err != nil || ps != core.PointOff {
+		t.Fatalf("absent Installed via 32-bit view = %v,%v want PointOff,nil", ps, err)
+	}
+	// Write Installed=1 through the 32-bit view, then it must probe On — mirroring an
+	// x86 runtime present only in WOW6432Node reading as installed (not absent).
+	if err := a.Apply(ctx, true); err != nil {
+		t.Fatalf("Apply(on) via 32-bit view: %v", err)
+	}
+	if ps, err := a.Probe(ctx); err != nil || ps != core.PointOn {
+		t.Errorf("Installed=1 via 32-bit view = %v,%v want PointOn,nil", ps, err)
+	}
+	// And the raw read through the same view confirms the value is really there.
+	existed, _, v, err := readRawView(registry.CURRENT_USER, path, "Installed", KindDword, ViewWow6432)
+	if err != nil || !existed {
+		t.Fatalf("readRawView(32-bit) after Apply: existed=%v err=%v", existed, err)
+	}
+	if g, ok := toU64(v); !ok || g != 1 {
+		t.Errorf("readRawView(32-bit) Installed = %v want 1", v)
+	}
+}
+
 // TestRegSetQwordRoundTrip exercises the KindQword path end to end.
 func TestRegSetQwordRoundTrip(t *testing.T) {
 	path := testKey(t)

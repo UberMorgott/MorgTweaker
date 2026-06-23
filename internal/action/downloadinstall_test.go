@@ -74,7 +74,7 @@ func TestDownloadInstallHappyPath(t *testing.T) {
 	var pcts []int
 	ctx := core.ActionContext{
 		Ctx:      context.Background(),
-		Progress: func(p int, _ string) { pcts = append(pcts, p) },
+		Progress: func(p int, _ string, _, _ int64) { pcts = append(pcts, p) },
 	}
 	if err := a.Apply(ctx, true); err != nil {
 		t.Fatalf("Apply(on) on good hash should succeed, got %v", err)
@@ -123,7 +123,7 @@ func TestDownloadInstallRejectsBadHash(t *testing.T) {
 	var lastPct int
 	ctx := core.ActionContext{
 		Ctx:      context.Background(),
-		Progress: func(p int, _ string) { lastPct = p },
+		Progress: func(p int, _ string, _, _ int64) { lastPct = p },
 	}
 	if err := a.Apply(ctx, true); err == nil {
 		t.Error("Apply should fail on sha256 mismatch")
@@ -167,7 +167,7 @@ func TestDownloadInstallCancel(t *testing.T) {
 	}
 	actx := core.ActionContext{
 		Ctx: ctx,
-		Progress: func(int, string) {
+		Progress: func(int, string, int64, int64) {
 			cancel() // cancel as soon as the first chunk lands
 		},
 	}
@@ -191,6 +191,19 @@ func TestDownloadInstallProbeDelegates(t *testing.T) {
 	none := DownloadInstall{}
 	if ps, _ := none.Probe(core.ActionContext{}); ps != core.PointOff {
 		t.Error("nil Detect should probe PointOff")
+	}
+}
+
+// TestDownloadInstallSkipVerifyAfter (FIX 1): an install with NO Detect has a
+// non-informative Probe (constant PointOff), so it must report SkipVerifyAfter()==
+// true — the engine then trusts Apply's exit code instead of falsely flagging the
+// successful install Blocked. An install WITH a Detect verifies normally (false).
+func TestDownloadInstallSkipVerifyAfter(t *testing.T) {
+	if !(DownloadInstall{}).SkipVerifyAfter() {
+		t.Error("DownloadInstall with Detect==nil must SkipVerifyAfter (non-informative probe)")
+	}
+	if (DownloadInstall{Detect: stubDetect{core.PointOn}}).SkipVerifyAfter() {
+		t.Error("DownloadInstall WITH a Detect must NOT SkipVerifyAfter (it is verifiable)")
 	}
 }
 

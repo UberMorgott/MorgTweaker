@@ -19,11 +19,15 @@ var allKeys = []Key{
 	kNeedsAdmin,
 	kStatusBlocked, kStatusAbsent, kStatusPartial, kStatusRebootPending,
 	kStatusUnknown, kStatusWorking, kProbing,
-	kMsgBlocked, kMsgRebootPending, kMsgActionDone, kMsgNoAction,
+	kMsgBlocked, kMsgBlockedGeneric, kMsgRebootPending, kMsgActionDone, kMsgNoAction,
 	kMsgApplied, kVerbOn, kVerbOff, kMsgNeedsAdmin, kMsgRolledBack,
 	kMsgSecRolledBack, kMsgFail, kMsgSecErrors,
 	kWhatApply, kWhatRollback,
 	kNoCategories, kNoTweaks,
+	kBtnApply, kBtnRollback, kBtnLang, kBtnQuit,
+	kProgOverall, kProgApplying, kProgRollingBack,
+	kProgDownloading, kProgInstalling,
+	kMsgCancelled, kMsgBatchSummary,
 }
 
 // TestEveryLangHasEveryKey: every Lang in langOrder must define every Key in tr.

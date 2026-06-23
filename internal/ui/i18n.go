@@ -84,7 +84,8 @@ const (
 	kProbing       // marker while a tweak's status is being (re)fetched
 
 	// status-aware apply / action messages
-	kMsgBlocked
+	kMsgBlocked        // Tamper-Protection block: carries a gate deep-link ('o')
+	kMsgBlockedGeneric // block WITHOUT a gate (verify-after / access-denied): no 'o'
 	kMsgRebootPending
 	kMsgActionDone
 	kMsgNoAction
@@ -106,6 +107,21 @@ const (
 	// empty-state placeholders
 	kNoCategories // "(no categories)"
 	kNoTweaks     // "(no tweaks in this category)"
+
+	// universal bottom button-bar labels (mouse-clickable footer)
+	kBtnApply    // "Apply"    — apply all checked appliable tweaks
+	kBtnRollback // "Rollback" — rollback all checked applied tweaks
+	kBtnLang     // "RU/EN"    — language toggle
+	kBtnQuit     // "Quit"     — exit
+
+	// progress-screen labels (apply/rollback batch view)
+	kProgOverall     // "Overall %d/%d" — completed/total tweaks (overall bar)
+	kProgApplying    // "applying"      — current-tweak phase during apply
+	kProgRollingBack // "rolling back"  — current-tweak phase during rollback
+	kProgDownloading // "Downloading"   — situational bar stage label
+	kProgInstalling  // "Installing"    — situational bar stage label
+	kMsgCancelled    // "cancelled"     — status line after esc aborts a batch
+	kMsgBatchSummary // "%d ok, %d failed" — return-to-list summary
 )
 
 // tr is the translation table: every Lang must carry every Key (guarded by the
@@ -135,6 +151,7 @@ var tr = map[Lang]map[Key]string{
 		kStatusWorking:       "выполняется",
 		kProbing:             "…",
 		kMsgBlocked:          "%s: заблокировано (Tamper Protection). Нажми o — открыть Центр безопасности.",
+		kMsgBlockedGeneric:   "%s: заблокировано (изменение не применилось или нет прав).",
 		kMsgRebootPending:    "%s: применено, нужна перезагрузка.",
 		kMsgActionDone:       "Открываю Центр безопасности Windows…",
 		kMsgNoAction:         "Для этого твика нет действия.",
@@ -153,6 +170,19 @@ var tr = map[Lang]map[Key]string{
 
 		kNoCategories: "(нет категорий)",
 		kNoTweaks:     "(в этой категории нет твиков)",
+
+		kBtnApply:    "Применить",
+		kBtnRollback: "Откатить",
+		kBtnLang:     "RU/EN",
+		kBtnQuit:     "Выход",
+
+		kProgOverall:     "Общий %d/%d",
+		kProgApplying:    "применение",
+		kProgRollingBack: "откат",
+		kProgDownloading: "Скачивание",
+		kProgInstalling:  "Установка",
+		kMsgCancelled:    "отменено",
+		kMsgBatchSummary: "готово: %d, ошибок: %d",
 	},
 	LangEN: {
 		kAppTitle: "MorgTweaker",
@@ -178,6 +208,7 @@ var tr = map[Lang]map[Key]string{
 		kStatusWorking:       "working",
 		kProbing:             "…",
 		kMsgBlocked:          "%s: blocked (Tamper Protection). Press o to open Windows Security.",
+		kMsgBlockedGeneric:   "%s: blocked (change didn't apply or access denied).",
 		kMsgRebootPending:    "%s: applied, reboot required.",
 		kMsgActionDone:       "Opening Windows Security…",
 		kMsgNoAction:         "No action for this tweak.",
@@ -196,6 +227,19 @@ var tr = map[Lang]map[Key]string{
 
 		kNoCategories: "(no categories)",
 		kNoTweaks:     "(no tweaks in this category)",
+
+		kBtnApply:    "Apply",
+		kBtnRollback: "Rollback",
+		kBtnLang:     "RU/EN",
+		kBtnQuit:     "Quit",
+
+		kProgOverall:     "Overall %d/%d",
+		kProgApplying:    "applying",
+		kProgRollingBack: "rolling back",
+		kProgDownloading: "Downloading",
+		kProgInstalling:  "Installing",
+		kMsgCancelled:    "cancelled",
+		kMsgBatchSummary: "%d ok, %d failed",
 	},
 }
 

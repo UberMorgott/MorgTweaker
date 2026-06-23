@@ -13,6 +13,9 @@ package engine
 
 import (
 	"context"
+	"errors"
+	"io/fs"
+	"syscall"
 
 	"morgtweaker/internal/backup"
 	"morgtweaker/internal/core"
@@ -159,6 +162,12 @@ func (e *Engine) ApplyCtx(ctx core.ActionContext, t core.Tweak, on bool) (core.S
 		})
 		if runErr != nil {
 			e.restoreIndices(ctx, t, applied) // best-effort; collected errs dropped here
+			// Map an OS permission error (e.g. ERROR_ACCESS_DENIED from a registry
+			// write without sufficient rights) to a clean Blocked status + friendly
+			// message, keeping the raw error reachable via Unwrap for logging.
+			if st, mapped, ok := classifyApplyErr(runErr); ok {
+				return st, mapped
+			}
 			return e.honestStatus(ctx, t), runErr
 		}
 	}
@@ -183,16 +192,30 @@ func (e *Engine) ApplyCtx(ctx core.ActionContext, t core.Tweak, on bool) (core.S
 	return st, nil
 }
 
+// verifyAfterSkipper lets an action opt OUT of the engine's per-action
+// verify-after. An install/one-shot action whose Probe is non-informative (e.g.
+// DownloadInstall with no Detect, whose Probe returns a constant) would otherwise
+// re-probe != want after a SUCCESSFUL apply and be falsely flagged as reverted →
+// StatusBlocked. Such an action reports SkipVerifyAfter()==true: its success is
+// already determined by Apply (e.g. the installer's accepted exit code), so the
+// engine trusts that result instead of a meaningless re-probe.
+type verifyAfterSkipper interface{ SkipVerifyAfter() bool }
+
 // verifyAfter re-probes each action and reports whether any non-absent action
 // failed to stick in the direction just applied (a silent revert). Applied
 // on=true expects PointOn per action; on=false expects PointOff; PointAbsent is
-// n/a and skipped (it never blocks).
+// n/a and skipped (it never blocks). An action that implements verifyAfterSkipper
+// and returns true is skipped entirely: its Probe is non-informative, so its
+// success was already established by Apply (the install exit code), not a re-probe.
 func (e *Engine) verifyAfter(ctx core.ActionContext, t core.Tweak, on bool) (blocked bool, err error) {
 	want := core.PointOff
 	if on {
 		want = core.PointOn
 	}
 	for _, a := range t.Actions {
+		if s, ok := a.(verifyAfterSkipper); ok && s.SkipVerifyAfter() {
+			continue // non-informative probe: success is decided by Apply, not a re-probe
+		}
 		ps, perr := a.Probe(ctx)
 		if perr != nil {
 			return false, perr
@@ -309,3 +332,51 @@ var errBackupDisabled = backupDisabledErr{}
 type backupDisabledErr struct{}
 
 func (backupDisabledErr) Error() string { return "engine: backup store disabled, rollback unavailable" }
+
+// errAccessDenied is the Windows ERROR_ACCESS_DENIED code (5). Declared locally so
+// classification works on any build without importing x/sys/windows here.
+const errAccessDenied = syscall.Errno(5)
+
+// blockedErr is a permission failure surfaced to the user with a friendly message
+// while keeping the raw OS error reachable via Unwrap for logging. Its Error()
+// is the friendly text (so the UI never prints the bare "Access is denied."),
+// and Unwrap() yields the original error for diagnostics.
+type blockedErr struct {
+	friendly string
+	raw      error
+}
+
+func (e blockedErr) Error() string { return e.friendly }
+func (e blockedErr) Unwrap() error { return e.raw }
+
+// isAccessDenied reports whether err is (or wraps) an access-denied permission
+// failure — either the Windows ERROR_ACCESS_DENIED errno or the portable
+// fs.ErrPermission, both of which a registry/exec write can surface.
+func isAccessDenied(err error) bool {
+	if errors.Is(err, errAccessDenied) || errors.Is(err, fs.ErrPermission) {
+		return true
+	}
+	var errno syscall.Errno
+	if errors.As(err, &errno) && errno == errAccessDenied {
+		return true
+	}
+	return false
+}
+
+// classifyApplyErr maps an apply error to a clean engine status + user-facing
+// error. An access-denied failure (ran without sufficient rights) becomes
+// (StatusBlocked, friendly blockedErr) so the UI shows actionable text instead of
+// leaking the raw OS string, while logging can still Unwrap the raw cause. Any
+// other error returns ok=false so the caller keeps its honest-status path.
+func classifyApplyErr(err error) (status core.Status, mapped error, ok bool) {
+	if err == nil {
+		return core.StatusOff, nil, false
+	}
+	if isAccessDenied(err) {
+		return core.StatusBlocked, blockedErr{
+			friendly: "access denied — run MorgTweaker as administrator and try again",
+			raw:      err,
+		}, true
+	}
+	return core.StatusOff, err, false
+}
