@@ -1,0 +1,10 @@
+# Build output
+/dist/
+*.exe
+
+# Generated Windows resource objects (produced by `go generate` / goversioninfo)
+cmd/morgtweaker/*.syso
+
+# OS / editor cruft
+Thumbs.db
+.DS_Store
