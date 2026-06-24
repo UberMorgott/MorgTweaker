@@ -146,18 +146,45 @@ func (m model) rightBody(innerW int) []string {
 			rowStyle = appliedStyle // grey/dim
 		}
 
-		// Parents show an expand caret (▾/▸) instead of a checkbox; leaves/children
-		// show a checkbox ONLY when they HAVE an action (appliable OR rollbackable).
-		// The caret is padded to the checkbox width so child/leaf boxes stay aligned.
-		// Checkbox fill is driven SOLELY by m.selected (decoupled from status).
-		var glyphCh string
-		switch {
-		case tw.IsParent():
+		name := tweakName(m.lang, tw)
+
+		// Children of an expanded parent are indented so their checkbox column lands
+		// directly under the parent's checkbox: the parent draws caret(glyphOff width)
+		// + a space before its box, so the child indent is that same width + 1.
+		indent := ""
+		if r.child {
+			indent = strings.Repeat(" ", lipgloss.Width(glyphOff)+1)
+		}
+
+		marker := m.rowMarker(tw, st)
+		styledName := rowStyle.Render(name)
+
+		// PARENT: caret cell + a DERIVED checkbox + name + a (*) mixed-state marker.
+		// The caret toggles expand/collapse; the checkbox glyph is derived from the
+		// children's selection (all → [x], none → [ ], some → [~] plus "(*)"). The
+		// (*) is visible even when collapsed, so a partial selection is never hidden.
+		if tw.IsParent() {
 			caret := "▸"
 			if m.expanded[tw.ID] {
 				caret = "▾"
 			}
-			glyphCh = padLeftCaret(caret)
+			_, _, mixed := m.parentSelState(tw)
+			box := m.parentGlyph(tw)
+			star := ""
+			if mixed {
+				star = appliableStyle.Render(" (*)")
+			}
+			raw := indent + rowStyle.Render(padLeftCaret(caret)) + " " +
+				rowStyle.Render(box) + " " + styledName + star + marker
+			lines[i] = truncDisplay(raw, innerW)
+			continue
+		}
+
+		// LEAF/CHILD: a checkbox ONLY when it HAS an action (appliable OR
+		// rollbackable); otherwise an aligned blank. Fill is driven SOLELY by
+		// m.selected (decoupled from status).
+		var glyphCh string
+		switch {
 		case statusHasAction(st):
 			glyphCh = glyphOff
 			if m.selected[tw.ID] {
@@ -167,18 +194,7 @@ func (m model) rightBody(innerW int) []string {
 			glyphCh = strings.Repeat(" ", lipgloss.Width(glyphOff)) // aligned blank
 		}
 
-		name := tweakName(m.lang, tw)
-
-		// Children of an expanded parent are indented one step under it.
-		indent := ""
-		if r.child {
-			indent = "  "
-		}
-
-		marker := m.rowMarker(tw, st)
-
 		glyph := rowStyle.Render(glyphCh)
-		styledName := rowStyle.Render(name)
 
 		// Whole-row color (grey/bright via rowStyle) is the ONLY per-row styling —
 		// there is no focus/cursor highlight (mouse-only UX has no keyboard cursor).
@@ -186,6 +202,23 @@ func (m model) rightBody(innerW int) []string {
 		lines[i] = truncDisplay(raw, innerW)
 	}
 	return lines
+}
+
+// parentGlyph returns a PARENT row's checkbox glyph, derived from its actionable
+// children: all selected → [x], none (or zero actionable) → [ ], some-but-not-all
+// → [~]. The mixed [~] pairs with a "(*)" marker drawn after the name (see
+// rightBody), so a partial selection reads as such even when the parent is
+// collapsed.
+func (m model) parentGlyph(tw core.Tweak) string {
+	sel, actionable, mixed := m.parentSelState(tw)
+	switch {
+	case mixed:
+		return glyphPartial
+	case actionable > 0 && sel == actionable:
+		return glyphOn
+	default:
+		return glyphOff
+	}
 }
 
 // padLeftCaret left-pads a single-cell expand caret into the checkbox glyph width
@@ -534,6 +567,18 @@ func (m model) paneAtX(x int) pane {
 		return paneLeft
 	}
 	return paneRight
+}
+
+// inCaretCell reports whether a screen X falls within a PARENT row's caret cell —
+// the padded-caret span (one checkbox width) at the very start of the right-pane
+// content. Parents are not indented, so the caret cell begins at the right
+// content origin: screen-x = frameBorderX + leftWidth + dividerW. A click there
+// toggles expand/collapse; a click past it falls on the checkbox/name and toggles
+// the check instead.
+func (m model) inCaretCell(x int) bool {
+	start := frameBorderX + m.leftWidth() + dividerW
+	end := start + lipgloss.Width(glyphOff)
+	return x >= start && x < end
 }
 
 // Border-induced offset of inner content from the screen origin: the top edge

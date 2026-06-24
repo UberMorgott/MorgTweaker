@@ -162,6 +162,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case paneRight:
 			// CLICK = SELECT ONLY: move the cursor and toggle the checkbox; no apply.
 			m.twCursor = idx
+			// On a parent row a click in the caret cell toggles expand/collapse;
+			// anywhere else on the row toggles the check (handled by toggleCurrent).
+			if tw, ok := m.curTweak(); ok && tw.IsParent() && m.inCaretCell(mc.X) {
+				m.expanded[tw.ID] = !m.expanded[tw.ID]
+				return m, nil
+			}
 			return m.toggleCurrent()
 		}
 		return m, nil
@@ -222,9 +228,29 @@ func (m model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg.String() {
-	case "tab", "right":
+	case "tab":
 		m.activePane = paneRight
-	case "shift+tab", "left":
+	case "right":
+		// On a collapsed parent in the right pane, "right" EXPANDS it; otherwise it
+		// just focuses the right pane (the existing pane-switch behavior).
+		if m.activePane == paneRight {
+			if tw, ok := m.curTweak(); ok && tw.IsParent() && !m.expanded[tw.ID] {
+				m.expanded[tw.ID] = true
+				return m, nil
+			}
+		}
+		m.activePane = paneRight
+	case "shift+tab":
+		m.activePane = paneLeft
+	case "left":
+		// On an expanded parent in the right pane, "left" COLLAPSES it; otherwise it
+		// focuses the left pane (the existing pane-switch behavior).
+		if m.activePane == paneRight {
+			if tw, ok := m.curTweak(); ok && tw.IsParent() && m.expanded[tw.ID] {
+				delete(m.expanded, tw.ID)
+				return m, nil
+			}
+		}
 		m.activePane = paneLeft
 
 	case "up", "k":
@@ -420,20 +446,38 @@ func clampIdx(i, n int) int {
 
 // --- actions (all side effects leave as tea.Cmds) ---------------------------
 
-// toggleCurrent SELECTS ONLY: it flips the right-pane focused tweak's checkbox
+// toggleCurrent SELECTS ONLY: it flips the right-pane focused row's checkbox
 // (m.selected), decoupled from probed status, and dispatches NOTHING. Apply and
 // rollback happen exclusively via the bottom button bar. Rows with no available
 // action (blocked / absent / unprobed / in-flight) cannot be selected. Returns a
 // nil Cmd by design.
+//
+// On a PARENT this toggles the CHECK of all its actionable children (the parent
+// has no own selected entry — its checkbox is derived from the children): if all
+// actionable children are already selected, clear them all; otherwise select them
+// all (so a mixed state resolves to all-on on the first toggle). Expand/collapse
+// is a SEPARATE action (arrow keys / caret click), not this.
 func (m model) toggleCurrent() (tea.Model, tea.Cmd) {
 	tw, ok := m.curTweak()
 	if !ok {
 		return m, nil
 	}
 	if tw.IsParent() {
-		// Enter/space/click on a parent EXPANDS it (never checks it — a parent has
-		// no Actions of its own; its children carry the appliable work).
-		m.expanded[tw.ID] = !m.expanded[tw.ID]
+		sel, actionable, _ := m.parentSelState(tw)
+		if actionable == 0 {
+			return m, nil // nothing to select on this parent → no-op
+		}
+		check := sel < actionable // not all selected → select all; else clear all
+		for _, ch := range tw.Children {
+			if !statusHasAction(m.statusOf(ch.ID)) {
+				continue
+			}
+			if check {
+				m.selected[ch.ID] = true
+			} else {
+				delete(m.selected, ch.ID)
+			}
+		}
 		return m, nil
 	}
 	if !statusHasAction(m.rowStatus(tw)) {
@@ -444,21 +488,14 @@ func (m model) toggleCurrent() (tea.Model, tea.Cmd) {
 }
 
 // applyQueueIDs returns the leaf tweak IDs to apply: every checked appliable leaf
-// in catalog order, with a checked PARENT expanded into its appliable children
-// (the parent itself, having no actions, is never queued). A child that is both
-// individually checked and under a checked parent is deduped to a single entry.
+// (and checked appliable CHILD) in catalog order. Selection truth lives entirely
+// in m.selected per child — a parent has no own selected entry (checking it sets
+// its children directly via toggleCurrent), so the parent is never queued itself;
+// the queue is driven by the children's own m.selected.
 func (m model) applyQueueIDs() []string {
 	var ids []string
 	for _, tw := range m.allTweaks() {
 		if tw.IsParent() {
-			if m.selected[tw.ID] {
-				for _, ch := range tw.Children {
-					if statusAppliable(m.statusOf(ch.ID)) {
-						ids = append(ids, ch.ID)
-					}
-				}
-			}
-			// also allow individually-checked children (when expanded/selected).
 			for _, ch := range tw.Children {
 				if m.selected[ch.ID] && statusAppliable(m.statusOf(ch.ID)) {
 					ids = append(ids, ch.ID)

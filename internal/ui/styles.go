@@ -89,6 +89,7 @@ const (
 // checkbox glyphs — ASCII so every cell is single-display-width and uniform
 // across rows (no East-Asian-width / variation-selector ambiguity).
 const (
-	glyphOn  = "[x]"
-	glyphOff = "[ ]"
+	glyphOn      = "[x]"
+	glyphOff     = "[ ]"
+	glyphPartial = "[~]" // parent with SOME (not all) actionable children checked
 )

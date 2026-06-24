@@ -245,6 +245,31 @@ func (m model) rowStatus(tw core.Tweak) core.Status {
 	}
 }
 
+// parentSelState derives a PARENT row's checkbox state from its actionable
+// children — the single source of truth for both the rendered glyph and the (*)
+// mixed-state marker. "Actionable" = statusHasAction(childStatus) true (a child
+// with no available action can't be selected, so it is excluded from the tally).
+//
+//	actionable = number of children that have an action
+//	selected   = how many of those are checked in m.selected
+//	mixed      = 0 < selected < actionable (some-but-not-all checked)
+//
+// Zero actionable children → selected=0, actionable=0, mixed=false: the parent
+// renders [ ] with no (*) and its toggle is a no-op.
+func (m model) parentSelState(tw core.Tweak) (selected, actionable int, mixed bool) {
+	for _, ch := range tw.Children {
+		if !statusHasAction(m.statusOf(ch.ID)) {
+			continue
+		}
+		actionable++
+		if m.selected[ch.ID] {
+			selected++
+		}
+	}
+	mixed = selected > 0 && selected < actionable
+	return selected, actionable, mixed
+}
+
 // allTweaks flattens the catalog into one slice (for the startup batch probe).
 func (m model) allTweaks() []core.Tweak {
 	var out []core.Tweak
