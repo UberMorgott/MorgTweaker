@@ -19,8 +19,21 @@ var privacy = []core.Tweak{
 		// force a needless winlogon impersonation).
 		Elevation: core.ElevAdmin,
 		// v1: Start ON=4 (disabled), OFF=2 (automatic).
-		Actions: []core.Action{action.ServiceStart{
-			Root: registry.LOCAL_MACHINE, Svc: "DiagTrack", OnStart: 4, OffStart: 2, Elev: core.ElevAdmin,
-		}},
+		Actions: []core.Action{
+			action.ServiceStart{
+				Root: registry.LOCAL_MACHINE, Svc: "DiagTrack", OnStart: 4, OffStart: 2, Elev: core.ElevAdmin,
+			},
+			// Canonical "Allow Telemetry" GPO: 0 = Security/off. OffAbsent removes
+			// the policy value to restore the OS default.
+			action.RegSet{
+				Root:      registry.LOCAL_MACHINE,
+				Path:      `SOFTWARE\Policies\Microsoft\Windows\DataCollection`,
+				Value:     "AllowTelemetry",
+				Kind:      action.KindDword,
+				On:        uint64(0),
+				OffAbsent: true,
+				Elev:      core.ElevAdmin,
+			},
+		},
 	},
 }
