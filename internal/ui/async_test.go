@@ -254,14 +254,28 @@ func TestEscCancelsInflightApply(t *testing.T) {
 }
 
 // TestApplySelectedSkipsNonAppliable: only CHECKED + appliable rows enter the
-// batch; a checked-but-already-applied row is ignored by apply-selected.
+// batch; a checked row whose status is hard-blocked (never appliable) is ignored
+// by apply-selected. NOTE: StatusOn IS appliable now (force-reapply) — see
+// TestApplySelectedReappliesCheckedOn below.
 func TestApplySelectedSkipsNonAppliable(t *testing.T) {
 	m := New(twoCat(), engine.New(nil))
-	m.statuses["prep.x"] = core.StatusOn // applied → not appliable
+	m.statuses["prep.x"] = core.StatusBlocked // hard-blocked → never appliable
 	m.selected["prep.x"] = true
 	_, cmd := m.applySelected()
 	if cmd != nil {
 		t.Error("applySelected must skip checked rows that are not appliable")
+	}
+}
+
+// TestApplySelectedReappliesCheckedOn (force-reapply): a checked already-applied
+// (StatusOn) row IS now appliable, so apply-selected dispatches a batch for it.
+func TestApplySelectedReappliesCheckedOn(t *testing.T) {
+	m := New(twoCat(), engine.New(nil))
+	m.statuses["prep.x"] = core.StatusOn // applied → re-appliable on [Apply]
+	m.selected["prep.x"] = true
+	_, cmd := m.applySelected()
+	if cmd == nil {
+		t.Error("applySelected must re-apply a checked already-applied (StatusOn) row")
 	}
 }
 

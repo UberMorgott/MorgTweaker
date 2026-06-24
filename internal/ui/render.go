@@ -103,8 +103,11 @@ func (m model) leftBody(innerW int) []string {
 // / unprobed / in-flight rows have NO action (no checkbox).
 
 // statusAppliable reports whether a tweak in this status can be APPLIED now.
+// StatusOn is included so an already-applied (grey) row that the user explicitly
+// checks is RE-applied on [Apply] (RegSet rewrites the same value; an install
+// re-downloads + reinstalls). Row COLOUR is unaffected — only this filter widens.
 func statusAppliable(st core.Status) bool {
-	return st == core.StatusOff || st == core.StatusPartial
+	return st == core.StatusOff || st == core.StatusPartial || st == core.StatusOn
 }
 
 // statusRollbackable reports whether a tweak in this status is APPLIED and can be
