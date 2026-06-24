@@ -66,3 +66,54 @@ func TestBackupRoundTripFields(t *testing.T) {
 		t.Error("Backup fields not preserved")
 	}
 }
+
+func TestFindLocatesChild(t *testing.T) {
+	cat := Catalog{{ID: "prep", Tweaks: []Tweak{
+		{ID: "prep.group", Children: []Tweak{
+			{ID: "prep.group.a"},
+			{ID: "prep.group.b"},
+		}},
+		{ID: "prep.leaf"},
+	}}}
+	if _, ok := cat.Find("prep.group.b"); !ok {
+		t.Fatal("Find must locate a child tweak by ID")
+	}
+	if _, ok := cat.Find("prep.group"); !ok {
+		t.Fatal("Find must still locate the parent")
+	}
+	if _, ok := cat.Find("prep.leaf"); !ok {
+		t.Fatal("Find must still locate a normal leaf")
+	}
+	if _, ok := cat.Find("nope"); ok {
+		t.Fatal("Find must return ok=false for a missing id")
+	}
+}
+
+func TestLeavesExpandsParents(t *testing.T) {
+	cat := Catalog{{ID: "prep", Tweaks: []Tweak{
+		{ID: "prep.group", Children: []Tweak{{ID: "prep.group.a"}, {ID: "prep.group.b"}}},
+		{ID: "prep.leaf"},
+	}}}
+	var ids []string
+	for _, l := range cat.Leaves() {
+		ids = append(ids, l.ID)
+	}
+	want := []string{"prep.group.a", "prep.group.b", "prep.leaf"}
+	if len(ids) != len(want) {
+		t.Fatalf("Leaves ids = %v, want %v", ids, want)
+	}
+	for i := range want {
+		if ids[i] != want[i] {
+			t.Fatalf("Leaves ids = %v, want %v", ids, want)
+		}
+	}
+}
+
+func TestIsParent(t *testing.T) {
+	if (Tweak{}).IsParent() {
+		t.Fatal("a tweak with no children is not a parent")
+	}
+	if !(Tweak{Children: []Tweak{{ID: "x"}}}).IsParent() {
+		t.Fatal("a tweak with children is a parent")
+	}
+}
