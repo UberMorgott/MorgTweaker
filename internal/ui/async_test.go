@@ -254,14 +254,28 @@ func TestEscCancelsInflightApply(t *testing.T) {
 }
 
 // TestApplySelectedSkipsNonAppliable: only CHECKED + appliable rows enter the
-// batch; a checked-but-already-applied row is ignored by apply-selected.
+// batch; a checked row whose status is hard-blocked (never appliable) is ignored
+// by apply-selected. NOTE: StatusOn IS appliable now (force-reapply) — see
+// TestApplySelectedReappliesCheckedOn below.
 func TestApplySelectedSkipsNonAppliable(t *testing.T) {
 	m := New(twoCat(), engine.New(nil))
-	m.statuses["prep.x"] = core.StatusOn // applied → not appliable
+	m.statuses["prep.x"] = core.StatusBlocked // hard-blocked → never appliable
 	m.selected["prep.x"] = true
 	_, cmd := m.applySelected()
 	if cmd != nil {
 		t.Error("applySelected must skip checked rows that are not appliable")
+	}
+}
+
+// TestApplySelectedReappliesCheckedOn (force-reapply): a checked already-applied
+// (StatusOn) row IS now appliable, so apply-selected dispatches a batch for it.
+func TestApplySelectedReappliesCheckedOn(t *testing.T) {
+	m := New(twoCat(), engine.New(nil))
+	m.statuses["prep.x"] = core.StatusOn // applied → re-appliable on [Apply]
+	m.selected["prep.x"] = true
+	_, cmd := m.applySelected()
+	if cmd == nil {
+		t.Error("applySelected must re-apply a checked already-applied (StatusOn) row")
 	}
 }
 
@@ -370,7 +384,8 @@ func TestToggleSelectsOnly(t *testing.T) {
 	m.activePane = paneRight
 	m.statuses["prep.x"] = core.StatusOff // appliable → has a checkbox
 
-	got, cmd := m.toggleCurrent()
+	out, cmd := m.toggleCurrent()
+	got := out.(model)
 	if cmd != nil {
 		t.Error("toggleCurrent must NOT dispatch (select-only); want nil Cmd")
 	}
@@ -378,7 +393,8 @@ func TestToggleSelectsOnly(t *testing.T) {
 		t.Error("toggleCurrent should check (select) the row")
 	}
 
-	got2, cmd2 := got.toggleCurrent()
+	out2, cmd2 := got.toggleCurrent()
+	got2 := out2.(model)
 	if cmd2 != nil {
 		t.Error("second toggle must also be select-only (nil Cmd)")
 	}
@@ -393,7 +409,8 @@ func TestToggleSkipsActionlessRows(t *testing.T) {
 	m := New(twoCat(), engine.New(nil))
 	m.activePane = paneRight
 	m.statuses["prep.x"] = core.StatusBlocked
-	got, _ := m.toggleCurrent()
+	out, _ := m.toggleCurrent()
+	got := out.(model)
 	if got.selected["prep.x"] {
 		t.Error("a no-action (blocked) row must not be selectable")
 	}

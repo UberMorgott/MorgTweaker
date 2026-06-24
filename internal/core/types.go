@@ -135,7 +135,11 @@ type Tweak struct {
 	Reboot    bool
 	Tags      []string
 	Actions   []Action
-	Gate      Gate
+	// Children, when non-empty, makes this Tweak an expandable PARENT: it has no
+	// own Actions; its children are individually-applicable leaf tweaks and its
+	// status is aggregated (in the UI) from theirs. Zero value (nil) = leaf.
+	Children []Tweak
+	Gate     Gate
 }
 
 // NeedsAdmin reports whether applying needs elevation (tweak level or any action).
@@ -151,6 +155,9 @@ func (t Tweak) NeedsAdmin() bool {
 	return false
 }
 
+// IsParent reports whether this tweak is an expandable group (has children).
+func (t Tweak) IsParent() bool { return len(t.Children) > 0 }
+
 // Category groups tweaks under a heading.
 type Category struct {
 	ID     string
@@ -161,14 +168,39 @@ type Category struct {
 // Catalog is the ordered set of categories shown by the app.
 type Catalog []Category
 
-// Find returns the tweak with the given id, ok=false if absent.
+// Find returns the tweak with the given id, ok=false if absent. It searches both
+// top-level tweaks AND their children (so a child tweak applied via the batch
+// queue resolves by ID).
 func (c Catalog) Find(id string) (Tweak, bool) {
 	for _, cat := range c {
 		for _, t := range cat.Tweaks {
 			if t.ID == id {
 				return t, true
 			}
+			for _, ch := range t.Children {
+				if ch.ID == id {
+					return ch, true
+				}
+			}
 		}
 	}
 	return Tweak{}, false
+}
+
+// Leaves returns every applicable LEAF tweak across all categories in order: a
+// parent is replaced by its children; a childless tweak yields itself. The engine
+// only ever probes/applies leaves — a parent has no Actions, so probing it would
+// read StatusAbsent. The UI aggregates a parent's status from its children.
+func (c Catalog) Leaves() []Tweak {
+	var out []Tweak
+	for _, cat := range c {
+		for _, t := range cat.Tweaks {
+			if t.IsParent() {
+				out = append(out, t.Children...)
+			} else {
+				out = append(out, t)
+			}
+		}
+	}
+	return out
 }

@@ -131,7 +131,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if p == paneLeft {
 			m.catScroll = clampScroll(m.catScroll+d, len(m.catalog), m.paneViewH())
 		} else {
-			m.twScroll = clampScroll(m.twScroll+d, len(m.curTweaks()), m.paneViewH())
+			m.twScroll = clampScroll(m.twScroll+d, len(m.visibleRows()), m.paneViewH())
 		}
 		return m, nil
 
@@ -336,7 +336,7 @@ func (m model) moveCursor(dir int) model {
 		m.catCursor = clampIdx(m.catCursor+dir, n)
 		m = m.selectCategory(m.catCursor)
 	} else {
-		n := len(m.curTweaks())
+		n := len(m.visibleRows())
 		if n == 0 {
 			return m
 		}
@@ -353,7 +353,7 @@ func (m model) moveCursorTo(idx int) model {
 			m = m.selectCategory(m.catCursor)
 		}
 	} else {
-		if n := len(m.curTweaks()); n > 0 {
+		if n := len(m.visibleRows()); n > 0 {
 			m.twCursor = clampIdx(idx, n)
 		}
 	}
@@ -364,7 +364,7 @@ func (m model) moveCursorToEnd() model {
 	if m.activePane == paneLeft {
 		return m.moveCursorTo(len(m.catalog) - 1)
 	}
-	return m.moveCursorTo(len(m.curTweaks()) - 1)
+	return m.moveCursorTo(len(m.visibleRows()) - 1)
 }
 
 // selectCategory sets the left cursor to idx and resets the RIGHT pane to top.
@@ -394,7 +394,7 @@ func (m model) clampScrolls() model {
 	m.catScroll = clampScroll(m.catScroll, len(m.catalog), viewH)
 
 	// Right pane.
-	nTw := len(m.curTweaks())
+	nTw := len(m.visibleRows())
 	if m.twCursor >= nTw {
 		m.twCursor = maxi(nTw-1, 0)
 	}
@@ -425,16 +425,66 @@ func clampIdx(i, n int) int {
 // rollback happen exclusively via the bottom button bar. Rows with no available
 // action (blocked / absent / unprobed / in-flight) cannot be selected. Returns a
 // nil Cmd by design.
-func (m model) toggleCurrent() (model, tea.Cmd) {
+func (m model) toggleCurrent() (tea.Model, tea.Cmd) {
 	tw, ok := m.curTweak()
 	if !ok {
 		return m, nil
 	}
-	if !statusHasAction(m.statusOf(tw.ID)) {
+	if tw.IsParent() {
+		// Enter/space/click on a parent EXPANDS it (never checks it — a parent has
+		// no Actions of its own; its children carry the appliable work).
+		m.expanded[tw.ID] = !m.expanded[tw.ID]
+		return m, nil
+	}
+	if !statusHasAction(m.rowStatus(tw)) {
 		return m, nil // no checkbox on this row → nothing to select
 	}
 	m.selected[tw.ID] = !m.selected[tw.ID]
 	return m, nil
+}
+
+// applyQueueIDs returns the leaf tweak IDs to apply: every checked appliable leaf
+// in catalog order, with a checked PARENT expanded into its appliable children
+// (the parent itself, having no actions, is never queued). A child that is both
+// individually checked and under a checked parent is deduped to a single entry.
+func (m model) applyQueueIDs() []string {
+	var ids []string
+	for _, tw := range m.allTweaks() {
+		if tw.IsParent() {
+			if m.selected[tw.ID] {
+				for _, ch := range tw.Children {
+					if statusAppliable(m.statusOf(ch.ID)) {
+						ids = append(ids, ch.ID)
+					}
+				}
+			}
+			// also allow individually-checked children (when expanded/selected).
+			for _, ch := range tw.Children {
+				if m.selected[ch.ID] && statusAppliable(m.statusOf(ch.ID)) {
+					ids = append(ids, ch.ID)
+				}
+			}
+			continue
+		}
+		if m.selected[tw.ID] && statusAppliable(m.statusOf(tw.ID)) {
+			ids = append(ids, tw.ID)
+		}
+	}
+	return dedupeStrings(ids)
+}
+
+// dedupeStrings returns s with duplicates removed, preserving first-seen order.
+func dedupeStrings(s []string) []string {
+	seen := make(map[string]bool, len(s))
+	out := s[:0:0]
+	for _, v := range s {
+		if seen[v] {
+			continue
+		}
+		seen[v] = true
+		out = append(out, v)
+	}
+	return out
 }
 
 // selectedByStatus collects, in stable catalog order across ALL categories, the
@@ -456,7 +506,7 @@ func (m model) applySelected() (model, tea.Cmd) {
 	if m.batchKind != batchNone {
 		return m, nil // a batch is already in flight — debounce
 	}
-	q := m.selectedByStatus(statusAppliable)
+	q := m.applyQueueIDs()
 	if len(q) == 0 {
 		return m, nil
 	}

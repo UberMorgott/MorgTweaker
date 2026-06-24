@@ -67,6 +67,10 @@ type model struct {
 	// click flips it. This — NOT core.Status — drives the checkbox glyph fill.
 	selected map[string]bool
 
+	// expanded marks expandable PARENT tweak IDs whose children are shown inline.
+	// Missing entry = collapsed. Independent of selection/status.
+	expanded map[string]bool
+
 	activePane pane
 
 	// LEFT pane (categories): one entry per Category.
@@ -139,15 +143,18 @@ func New(catalog core.Catalog, eng *engine.Engine) model {
 		progress: map[string]engine.ApplyProgressMsg{},
 		cancel:   map[string]context.CancelFunc{},
 		selected: map[string]bool{},
+		expanded: map[string]bool{},
 		prog:     new(*tea.Program),
 	}
 }
 
-// Init kicks off the initial async probe of the WHOLE catalog so every tweak's
-// status resolves off the UI goroutine; until BatchStatusMsg arrives every tweak
-// renders as StatusUnknown ("…").
+// Init kicks off the initial async probe of every LEAF tweak (Catalog.Leaves
+// replaces each parent with its children — a parent has no Actions and is never
+// engine-probed; the UI aggregates its status from its children). Status resolves
+// off the UI goroutine; until BatchStatusMsg arrives every tweak renders as
+// StatusUnknown ("…").
 func (m model) Init() tea.Cmd {
-	tws := m.allTweaks()
+	tws := m.catalog.Leaves()
 	if len(tws) == 0 {
 		return nil
 	}
@@ -177,11 +184,65 @@ func (m model) curTweaks() []core.Tweak {
 
 // curTweak returns the tweak under the right-pane cursor, ok=false when none.
 func (m model) curTweak() (core.Tweak, bool) {
-	tws := m.curTweaks()
-	if m.twCursor < 0 || m.twCursor >= len(tws) {
+	rows := m.visibleRows()
+	if m.twCursor < 0 || m.twCursor >= len(rows) {
 		return core.Tweak{}, false
 	}
-	return tws[m.twCursor], true
+	return rows[m.twCursor].tw, true
+}
+
+// visRow is one flattened right-pane row: a tweak plus whether it is an indented
+// child of an expanded parent. visibleRows is the single source the renderer,
+// cursor, hit-test, and selection all index, so they never disagree on geometry.
+type visRow struct {
+	tw    core.Tweak
+	child bool
+}
+
+// visibleRows flattens the current category's tweaks: each tweak is a row; an
+// expanded parent is immediately followed by its children as child rows.
+func (m model) visibleRows() []visRow {
+	var rows []visRow
+	for _, tw := range m.curTweaks() {
+		rows = append(rows, visRow{tw: tw})
+		if tw.IsParent() && m.expanded[tw.ID] {
+			for _, ch := range tw.Children {
+				rows = append(rows, visRow{tw: ch, child: true})
+			}
+		}
+	}
+	return rows
+}
+
+// rowStatus is the status to render/act on for a row: a parent aggregates its
+// children's cached statuses (any unknown → Unknown so it shows "…" until all
+// children resolve; all-on → On; all-off → Off; otherwise Partial); a leaf is its
+// own cached status.
+func (m model) rowStatus(tw core.Tweak) core.Status {
+	if !tw.IsParent() {
+		return m.statusOf(tw.ID)
+	}
+	on, off := 0, 0
+	for _, ch := range tw.Children {
+		switch m.statusOf(ch.ID) {
+		case core.StatusOn:
+			on++
+		case core.StatusOff:
+			off++
+		default:
+			return core.StatusUnknown // a child not yet resolved (or blocked/absent)
+		}
+	}
+	switch {
+	case on == 0 && off == 0:
+		return core.StatusUnknown
+	case off == 0:
+		return core.StatusOn
+	case on == 0:
+		return core.StatusOff
+	default:
+		return core.StatusPartial
+	}
 }
 
 // allTweaks flattens the catalog into one slice (for the startup batch probe).
