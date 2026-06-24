@@ -78,7 +78,7 @@ func TestRedistParentRegisteredUnderPrep(t *testing.T) {
 }
 
 // TestRedistVerifyModeInvariant is the fail-closed verify-mode guard (security
-// critical). Across all 12 children: the four 2022 children are evergreen
+// critical). Across all 12 children: the two 2022 children are evergreen
 // Authenticode-verified with NO SHA256 pin; every legacy child must be in
 // VerifySHA256 mode with a SHA256 that is NOT a valid 64-hex digest, so it CANNOT
 // run an installer before Task 7 grounds a real pin. AcceptExit and Elev are
