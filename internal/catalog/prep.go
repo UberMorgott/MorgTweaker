@@ -25,19 +25,29 @@ func prep(tc *action.TamperCache) []core.Tweak {
 		{
 			ID: "prep.disable_smartscreen", Category: "prep",
 			Name:      core.I18n{RU: "Отключить SmartScreen", EN: "Disable SmartScreen"},
-			Desc:      core.I18n{RU: "Выключить SmartScreen Проводника.", EN: "Turn off Explorer SmartScreen."},
-			Elevation: core.ElevAdmin,
-			Actions: []core.Action{action.RegSet{
-				Root:  registry.LOCAL_MACHINE,
-				Path:  `SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer`,
-				Value: "SmartScreenEnabled", Kind: action.KindString, On: "Off", Off: "On", Elev: core.ElevAdmin,
-			}},
+			Desc:      core.I18n{RU: "Policies\\...\\System EnableSmartScreen=0 (+ legacy Explorer). Требуется перезагрузка.", EN: "Policies\\...\\System EnableSmartScreen=0 (+ legacy Explorer). Requires reboot."},
+			Elevation: core.ElevAdmin, Reboot: true,
+			Actions: []core.Action{
+				// Primary, modern policy: EnableSmartScreen=0. OffAbsent restores the
+				// default (value deleted) on rollback.
+				action.RegSet{
+					Root:  registry.LOCAL_MACHINE,
+					Path:  `SOFTWARE\Policies\Microsoft\Windows\System`,
+					Value: "EnableSmartScreen", Kind: action.KindDword, On: uint64(0), OffAbsent: true, Elev: core.ElevAdmin,
+				},
+				// Secondary, legacy Win8-era surface (kept for older shells).
+				action.RegSet{
+					Root:  registry.LOCAL_MACHINE,
+					Path:  `SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer`,
+					Value: "SmartScreenEnabled", Kind: action.KindString, On: "Off", Off: "On", Elev: core.ElevAdmin,
+				},
+			},
 		},
 		defenderTweak(tc),
 		{
 			ID: "prep.pause_update", Category: "prep",
-			Name:      core.I18n{RU: "Приостановить авто-обновления", EN: "Pause automatic Windows Update"},
-			Desc:      core.I18n{RU: "WindowsUpdate\\AU NoAutoUpdate=1.", EN: "WindowsUpdate\\AU NoAutoUpdate=1."},
+			Name:      core.I18n{RU: "Отключить авто-установку обновлений", EN: "Disable automatic Windows Update install"},
+			Desc:      core.I18n{RU: "WindowsUpdate\\AU NoAutoUpdate=1 — отключает автоматическую установку обновлений.", EN: "WindowsUpdate\\AU NoAutoUpdate=1 — disables automatic update installation."},
 			Elevation: core.ElevAdmin, Reboot: true,
 			// v1: Off=nil -> OffAbsent (turning off restores the default by deleting the value).
 			Actions: []core.Action{action.RegSet{
