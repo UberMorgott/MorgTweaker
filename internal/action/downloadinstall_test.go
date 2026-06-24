@@ -194,16 +194,18 @@ func TestDownloadInstallProbeDelegates(t *testing.T) {
 	}
 }
 
-// TestDownloadInstallSkipVerifyAfter (FIX 1): an install with NO Detect has a
-// non-informative Probe (constant PointOff), so it must report SkipVerifyAfter()==
-// true — the engine then trusts Apply's exit code instead of falsely flagging the
-// successful install Blocked. An install WITH a Detect verifies normally (false).
+// TestDownloadInstallSkipVerifyAfter: an install's success is its accepted exit
+// code, not a Detect re-probe, so SkipVerifyAfter is ALWAYS true — with OR without
+// a Detect. A redist whose runtime is already present exits 1638 without rewriting
+// its "Installed" flag, so a Detect re-probe reads Off and would FALSELY flag the
+// successful install Blocked. Detect is still used for the LIST status, just not to
+// gate the apply result.
 func TestDownloadInstallSkipVerifyAfter(t *testing.T) {
 	if !(DownloadInstall{}).SkipVerifyAfter() {
-		t.Error("DownloadInstall with Detect==nil must SkipVerifyAfter (non-informative probe)")
+		t.Error("DownloadInstall with Detect==nil must SkipVerifyAfter")
 	}
-	if (DownloadInstall{Detect: stubDetect{core.PointOn}}).SkipVerifyAfter() {
-		t.Error("DownloadInstall WITH a Detect must NOT SkipVerifyAfter (it is verifiable)")
+	if !(DownloadInstall{Detect: stubDetect{core.PointOn}}).SkipVerifyAfter() {
+		t.Error("DownloadInstall WITH a Detect must STILL SkipVerifyAfter (exit code is authoritative, not a re-probe)")
 	}
 }
 

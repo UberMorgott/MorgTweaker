@@ -112,14 +112,14 @@ func (m model) progressBlocks(total int) [][]string {
 		})
 	}
 
-	// 2) CURRENT TWEAK — always during the operation.
-	if m.currentID != "" {
-		blocks = append(blocks, m.currentBlock(total, barW, indent))
-	}
-
-	// 3) SITUATIONAL download/install — only while a download/install streams.
+	// 2) CURRENT TWEAK. When a download/install is streaming, its own bar (block 3)
+	// already shows the in-flight progress for this tweak, so a separate generic
+	// CURRENT bar would be a redundant duplicate — show ONLY the download bar (it
+	// carries the tweak name). Otherwise (e.g. a registry tweak) show the CURRENT bar.
 	if blk, ok := m.downloadBlock(total, barW, indent); ok {
 		blocks = append(blocks, blk)
+	} else if m.currentID != "" {
+		blocks = append(blocks, m.currentBlock(total, barW, indent))
 	}
 
 	return blocks
@@ -173,20 +173,27 @@ func (m model) downloadBlock(total, barW int, indent string) (block []string, ok
 		return nil, false // not a download/install report
 	}
 
+	// Prefix the tweak's display name — this bar is the single in-flight indicator
+	// for the current tweak (it replaces the generic CURRENT bar during a stream).
+	name := m.currentID
+	if tw, ok := m.catalog.Find(m.currentID); ok {
+		name = tweakName(m.lang, tw)
+	}
+
 	// Install phase (or unknown-length download): no determinate byte counters.
 	if !isDL || p.Total <= 0 {
 		frac := 0.0
 		if !isDL {
 			frac = 1.0 // installing: download finished, show a full bar
 		}
-		caption := barCaptionStyle.Render(truncDisplay(stage, total))
-		return []string{caption, indent + renderBar(frac, barW)}, true
+		caption := name + "  " + barDetailStyle.Render(stage)
+		return []string{barCaptionStyle.Render(truncDisplay(caption, total)), indent + renderBar(frac, barW)}, true
 	}
 
 	frac := float64(p.Done) / float64(p.Total)
-	detail := fmt.Sprintf("%.1f / %.1f MB  %.1f MB/s",
-		bytesToMB(p.Done), bytesToMB(p.Total), m.dlSpeed/(1<<20))
-	caption := stage + "  " + barDetailStyle.Render(detail)
+	detail := fmt.Sprintf("%s  %d%%  %.1f / %.1f MB  %.1f MB/s",
+		stage, clampPct(p.Pct), bytesToMB(p.Done), bytesToMB(p.Total), m.dlSpeed/(1<<20))
+	caption := name + "  " + barDetailStyle.Render(detail)
 	return []string{
 		barCaptionStyle.Render(truncDisplay(caption, total)),
 		indent + renderBar(frac, barW),

@@ -254,15 +254,15 @@ func (a DownloadInstall) Probe(ctx core.ActionContext) (core.PointState, error) 
 }
 
 // SkipVerifyAfter reports whether the engine's per-action verify-after must SKIP
-// this action. It is true exactly when Detect==nil: Probe then returns a constant
-// (PointOff) regardless of install outcome, so re-probing after a SUCCESSFUL
-// install would compare PointOff != PointOn and FALSELY flag the install as
-// reverted/Blocked. An install is a one-shot whose success is determined by
-// Apply's installer exit code (mapped via AcceptExit), not by a re-probe — so when
-// there is no meaningful Detect, the engine trusts Apply and does not verify-after.
-// When Detect IS set (e.g. the per-arch VC++ runtime probe), this returns false so
-// the install is genuinely verified to have stuck.
-func (a DownloadInstall) SkipVerifyAfter() bool { return a.Detect == nil }
+// this action. For a DownloadInstall it is ALWAYS true: an install is a one-shot
+// whose success is decided by the installer's exit code (mapped via AcceptExit),
+// NOT by re-probing Detect. Re-probing after a successful install is unreliable —
+// e.g. a redist whose runtime is already present (newer) exits 1638 WITHOUT
+// rewriting its "Installed" flag, so a Detect re-probe reads Off and would FALSELY
+// flag the successful install as reverted/Blocked. Detect is still used for the
+// LIST status (installed/not in the catalog view) via Probe; it just must not gate
+// the apply result. So the engine trusts Apply's accepted exit code here.
+func (a DownloadInstall) SkipVerifyAfter() bool { return true }
 
 // streamWithProgress copies src→dst in chunks, reporting percent complete via
 // ctx.Report (using total as the denominator) and aborting on ctx cancellation.

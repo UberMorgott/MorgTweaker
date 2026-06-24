@@ -259,24 +259,22 @@ func (m model) viewString() string {
 	total := lw + dividerW + rw // inner content width (== innerW on a normal terminal)
 	viewH := m.paneViewH()
 
-	// During an apply/rollback batch the list+button bar are REPLACED by the
-	// progress screen (three stacked bars), still inside the same border + title
-	// and above the running status line. It reclaims the button row, so it spans
-	// viewH+buttonRows rows; the status bar stays for the live status message.
-	if m.screen == screenProgress {
-		region := m.progressRegion(total, viewH+buttonRows)
-		inner := make([]string, 0, len(region)+statusRows)
-		inner = append(inner, region...)
-		inner = append(inner, m.statusBar(total))
-		return m.frame(inner, total)
-	}
-
 	// Build the inner block: pane region rows + status bar + button bar, each
 	// exactly `total` display cells wide so the surrounding border stays flush.
 	inner := make([]string, 0, viewH+statusRows+buttonRows)
 
-	leftCells := m.renderPane(m.leftBody(lw-1), lw-1, viewH, m.catScroll, m.activePane == paneLeft)
-	rightCells := m.renderPane(m.rightBody(rw-1), rw-1, viewH, m.twScroll, m.activePane == paneRight)
+	// During an apply/rollback batch ONLY the right pane's content swaps to the
+	// progress bars; the left category list, divider, status bar and button bar all
+	// stay — progress is content of the split's right half, not a separate page.
+	leftActive := m.activePane == paneLeft && m.screen != screenProgress
+	leftCells := m.renderPane(m.leftBody(lw-1), lw-1, viewH, m.catScroll, leftActive)
+
+	var rightCells []string
+	if m.screen == screenProgress {
+		rightCells = m.progressRegion(rw, viewH)
+	} else {
+		rightCells = m.renderPane(m.rightBody(rw-1), rw-1, viewH, m.twScroll, m.activePane == paneRight)
+	}
 
 	divCol := borderStyle.Render("│")
 	if m.activePane == paneLeft {
