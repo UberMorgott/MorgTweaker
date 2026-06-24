@@ -148,9 +148,11 @@ func New(catalog core.Catalog, eng *engine.Engine) model {
 	}
 }
 
-// Init kicks off the initial async probe of the WHOLE catalog so every tweak's
-// status resolves off the UI goroutine; until BatchStatusMsg arrives every tweak
-// renders as StatusUnknown ("…").
+// Init kicks off the initial async probe of every LEAF tweak (Catalog.Leaves
+// replaces each parent with its children — a parent has no Actions and is never
+// engine-probed; the UI aggregates its status from its children). Status resolves
+// off the UI goroutine; until BatchStatusMsg arrives every tweak renders as
+// StatusUnknown ("…").
 func (m model) Init() tea.Cmd {
 	tws := m.catalog.Leaves()
 	if len(tws) == 0 {
