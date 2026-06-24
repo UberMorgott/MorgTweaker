@@ -125,13 +125,14 @@ func statusHasAction(st core.Status) bool {
 // category), with checkbox glyph + name + state/needs-admin marker. It reads ONLY
 // cached model state (m.statuses / m.probing / m.progress) — never any I/O.
 func (m model) rightBody(innerW int) []string {
-	tws := m.curTweaks()
-	if len(tws) == 0 {
+	rows := m.visibleRows()
+	if len(rows) == 0 {
 		return []string{dimStyle.Render(truncDisplay(T(m.lang, kNoTweaks), innerW))}
 	}
-	lines := make([]string, len(tws))
-	for i, tw := range tws {
-		st := m.statusOf(tw.ID)
+	lines := make([]string, len(rows))
+	for i, r := range rows {
+		tw := r.tw
+		st := m.rowStatus(tw)
 
 		// Row color = exactly TWO states (no third per-row foreground):
 		//   BRIGHT  = still appliable: not yet applied AND not blocked/unavailable
@@ -145,51 +146,82 @@ func (m model) rightBody(innerW int) []string {
 			rowStyle = appliedStyle // grey/dim
 		}
 
-		// Checkbox is shown ONLY on rows that HAVE an action (appliable OR
-		// applied-and-rollbackable); hard-blocked / unavailable / unprobed rows get
-		// an aligned blank instead. Its fill is driven SOLELY by the user's own
-		// selection (m.selected), decoupled from status: empty until toggled/clicked.
-		glyphCh := strings.Repeat(" ", lipgloss.Width(glyphOff)) // aligned blank, no box
-		if statusHasAction(st) {
+		// Parents show an expand caret (▾/▸) instead of a checkbox; leaves/children
+		// show a checkbox ONLY when they HAVE an action (appliable OR rollbackable).
+		// The caret is padded to the checkbox width so child/leaf boxes stay aligned.
+		// Checkbox fill is driven SOLELY by m.selected (decoupled from status).
+		var glyphCh string
+		switch {
+		case tw.IsParent():
+			caret := "▸"
+			if m.expanded[tw.ID] {
+				caret = "▾"
+			}
+			glyphCh = padLeftCaret(caret)
+		case statusHasAction(st):
 			glyphCh = glyphOff
 			if m.selected[tw.ID] {
 				glyphCh = glyphOn
 			}
+		default:
+			glyphCh = strings.Repeat(" ", lipgloss.Width(glyphOff)) // aligned blank
 		}
 
 		name := tweakName(m.lang, tw)
 
-		// Marker words ONLY for states that need explaining; plain on/off carry
-		// their meaning through color alone (no on/off labels).
-		marker := ""
-		switch {
-		case m.probing[tw.ID] && st == core.StatusUnknown:
-			marker = "  " + dimStyle.Render(T(m.lang, kProbing))
-		case st == core.StatusUnknown:
-			marker = "  " + dimStyle.Render(T(m.lang, kStatusUnknown))
-		case st == core.StatusWorking:
-			marker = "  " + appliableStyle.Render(m.progressLabel(tw.ID))
-		case tw.NeedsAdmin() && !m.isAdmin:
-			marker = "  " + adminOffStyle.Render(T(m.lang, kNeedsAdmin))
-		case st == core.StatusBlocked:
-			marker = "  " + errStyle.Render(T(m.lang, kStatusBlocked))
-		case st == core.StatusAbsent:
-			marker = "  " + dimStyle.Render(T(m.lang, kStatusAbsent))
-		case st == core.StatusPartial:
-			marker = "  " + appliableStyle.Render(T(m.lang, kStatusPartial))
-		case st == core.StatusRebootPending:
-			marker = "  " + adminOffStyle.Render(T(m.lang, kStatusRebootPending))
+		// Children of an expanded parent are indented one step under it.
+		indent := ""
+		if r.child {
+			indent = "  "
 		}
+
+		marker := m.rowMarker(tw, st)
 
 		glyph := rowStyle.Render(glyphCh)
 		styledName := rowStyle.Render(name)
 
 		// Whole-row color (grey/bright via rowStyle) is the ONLY per-row styling —
 		// there is no focus/cursor highlight (mouse-only UX has no keyboard cursor).
-		raw := glyph + " " + styledName + marker
+		raw := indent + glyph + " " + styledName + marker
 		lines[i] = truncDisplay(raw, innerW)
 	}
 	return lines
+}
+
+// padLeftCaret left-pads a single-cell expand caret into the checkbox glyph width
+// so a parent's caret occupies the same column span as a leaf/child checkbox,
+// keeping the name column aligned across parents, children and leaves.
+func padLeftCaret(caret string) string {
+	pad := lipgloss.Width(glyphOff) - lipgloss.Width(caret)
+	if pad < 0 {
+		pad = 0
+	}
+	return strings.Repeat(" ", pad) + caret
+}
+
+// rowMarker returns the trailing state marker for a right-pane row. Marker words
+// appear ONLY for states that need explaining; plain on/off carry their meaning
+// through color alone (no on/off labels).
+func (m model) rowMarker(tw core.Tweak, st core.Status) string {
+	switch {
+	case m.probing[tw.ID] && st == core.StatusUnknown:
+		return "  " + dimStyle.Render(T(m.lang, kProbing))
+	case st == core.StatusUnknown:
+		return "  " + dimStyle.Render(T(m.lang, kStatusUnknown))
+	case st == core.StatusWorking:
+		return "  " + appliableStyle.Render(m.progressLabel(tw.ID))
+	case tw.NeedsAdmin() && !m.isAdmin:
+		return "  " + adminOffStyle.Render(T(m.lang, kNeedsAdmin))
+	case st == core.StatusBlocked:
+		return "  " + errStyle.Render(T(m.lang, kStatusBlocked))
+	case st == core.StatusAbsent:
+		return "  " + dimStyle.Render(T(m.lang, kStatusAbsent))
+	case st == core.StatusPartial:
+		return "  " + appliableStyle.Render(T(m.lang, kStatusPartial))
+	case st == core.StatusRebootPending:
+		return "  " + adminOffStyle.Render(T(m.lang, kStatusRebootPending))
+	}
+	return ""
 }
 
 // progressLabel formats the streamed progress for a working tweak (e.g. "42%").
@@ -427,11 +459,9 @@ func (m model) buttonRowY() int {
 // reading ONLY the cached statuses (no I/O).
 func (m model) countOn() int {
 	n := 0
-	for _, c := range m.catalog {
-		for _, tw := range c.Tweaks {
-			if m.statusOf(tw.ID).IsOn() {
-				n++
-			}
+	for _, tw := range m.catalog.Leaves() {
+		if m.statusOf(tw.ID).IsOn() {
+			n++
 		}
 	}
 	return n

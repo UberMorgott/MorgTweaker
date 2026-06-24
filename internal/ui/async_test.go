@@ -384,7 +384,8 @@ func TestToggleSelectsOnly(t *testing.T) {
 	m.activePane = paneRight
 	m.statuses["prep.x"] = core.StatusOff // appliable → has a checkbox
 
-	got, cmd := m.toggleCurrent()
+	out, cmd := m.toggleCurrent()
+	got := out.(model)
 	if cmd != nil {
 		t.Error("toggleCurrent must NOT dispatch (select-only); want nil Cmd")
 	}
@@ -392,7 +393,8 @@ func TestToggleSelectsOnly(t *testing.T) {
 		t.Error("toggleCurrent should check (select) the row")
 	}
 
-	got2, cmd2 := got.toggleCurrent()
+	out2, cmd2 := got.toggleCurrent()
+	got2 := out2.(model)
 	if cmd2 != nil {
 		t.Error("second toggle must also be select-only (nil Cmd)")
 	}
@@ -407,7 +409,8 @@ func TestToggleSkipsActionlessRows(t *testing.T) {
 	m := New(twoCat(), engine.New(nil))
 	m.activePane = paneRight
 	m.statuses["prep.x"] = core.StatusBlocked
-	got, _ := m.toggleCurrent()
+	out, _ := m.toggleCurrent()
+	got := out.(model)
 	if got.selected["prep.x"] {
 		t.Error("a no-action (blocked) row must not be selectable")
 	}
