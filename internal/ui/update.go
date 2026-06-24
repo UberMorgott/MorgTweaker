@@ -131,7 +131,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if p == paneLeft {
 			m.catScroll = clampScroll(m.catScroll+d, len(m.catalog), m.paneViewH())
 		} else {
-			m.twScroll = clampScroll(m.twScroll+d, len(m.curTweaks()), m.paneViewH())
+			m.twScroll = clampScroll(m.twScroll+d, len(m.visibleRows()), m.paneViewH())
 		}
 		return m, nil
 
@@ -336,7 +336,7 @@ func (m model) moveCursor(dir int) model {
 		m.catCursor = clampIdx(m.catCursor+dir, n)
 		m = m.selectCategory(m.catCursor)
 	} else {
-		n := len(m.curTweaks())
+		n := len(m.visibleRows())
 		if n == 0 {
 			return m
 		}
@@ -353,7 +353,7 @@ func (m model) moveCursorTo(idx int) model {
 			m = m.selectCategory(m.catCursor)
 		}
 	} else {
-		if n := len(m.curTweaks()); n > 0 {
+		if n := len(m.visibleRows()); n > 0 {
 			m.twCursor = clampIdx(idx, n)
 		}
 	}
@@ -364,7 +364,7 @@ func (m model) moveCursorToEnd() model {
 	if m.activePane == paneLeft {
 		return m.moveCursorTo(len(m.catalog) - 1)
 	}
-	return m.moveCursorTo(len(m.curTweaks()) - 1)
+	return m.moveCursorTo(len(m.visibleRows()) - 1)
 }
 
 // selectCategory sets the left cursor to idx and resets the RIGHT pane to top.
@@ -394,7 +394,7 @@ func (m model) clampScrolls() model {
 	m.catScroll = clampScroll(m.catScroll, len(m.catalog), viewH)
 
 	// Right pane.
-	nTw := len(m.curTweaks())
+	nTw := len(m.visibleRows())
 	if m.twCursor >= nTw {
 		m.twCursor = maxi(nTw-1, 0)
 	}

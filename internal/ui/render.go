@@ -530,7 +530,7 @@ func (m model) rowAtClick(x, y int) (p pane, idx int, ok bool) {
 	case paneLeft:
 		total, scroll = len(m.catalog), m.catScroll
 	case paneRight:
-		total, scroll = len(m.curTweaks()), m.twScroll
+		total, scroll = len(m.visibleRows()), m.twScroll
 	}
 	off := clampScroll(scroll, total, viewH)
 	idx = off + ry
