@@ -39,6 +39,34 @@ func TestCatalogValid(t *testing.T) {
 			if tw.Name.RU == "" || tw.Name.EN == "" {
 				t.Errorf("tweak %q missing RU/EN name", tw.ID)
 			}
+			if tw.IsParent() {
+				// A parent carries the Desc and has NO own actions; validate its
+				// children instead. Each child must have a namespaced non-empty ID,
+				// a RU/EN name, and at least one action. Children need no Desc (the
+				// parent carries it). Child IDs join the duplicate-ID check.
+				if len(tw.Actions) != 0 {
+					t.Errorf("parent tweak %q must have no own actions", tw.ID)
+				}
+				for _, ch := range tw.Children {
+					if ch.ID == "" {
+						t.Errorf("parent %q has a child with empty ID", tw.ID)
+					}
+					if seen[ch.ID] {
+						t.Errorf("duplicate tweak id %q", ch.ID)
+					}
+					seen[ch.ID] = true
+					if !strings.HasPrefix(ch.ID, c.ID+".") {
+						t.Errorf("child %q not namespaced under category %q", ch.ID, c.ID)
+					}
+					if ch.Name.RU == "" || ch.Name.EN == "" {
+						t.Errorf("child %q missing RU/EN name", ch.ID)
+					}
+					if len(ch.Actions) == 0 {
+						t.Errorf("child %q has no actions", ch.ID)
+					}
+				}
+				continue
+			}
 			if tw.Desc.RU == "" || tw.Desc.EN == "" {
 				t.Errorf("tweak %q missing RU/EN desc", tw.ID)
 			}
