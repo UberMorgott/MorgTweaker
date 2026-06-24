@@ -310,7 +310,17 @@ func (e *Engine) restoreIndices(ctx core.ActionContext, t core.Tweak, idxs []int
 					continue
 				}
 				if !ok {
-					continue // nothing snapshotted for this action
+					// No save-once backup: the tweak was never APPLIED via this tool
+					// (e.g. UAC was already disabled before MorgTweaker ran), yet it
+					// probes On so the UI offers a rollback. Fall back to writing the
+					// action's known OFF state via Apply(off=false) so the rollback
+					// still reverts a known registry value instead of a silent no-op.
+					// For an action whose Apply(off) is inherently a no-op (an install
+					// has no inverse), this is harmless.
+					if aerr := t.Actions[i].Apply(ctx, false); aerr != nil {
+						errs = append(errs, aerr)
+					}
+					continue
 				}
 				if rerr := t.Actions[i].Restore(ctx, bak); rerr != nil {
 					errs = append(errs, rerr)

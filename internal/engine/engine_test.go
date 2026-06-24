@@ -371,11 +371,19 @@ func TestRollbackRestoresReverseOrderAndDeletes(t *testing.T) {
 	}
 }
 
-func TestRollbackSkipsUnsnapshottedActions(t *testing.T) {
+// TestRollbackNoBackupAppliesOffState: a tweak rolled back with NO save-once
+// backup (it was enabled outside this tool — e.g. UAC already disabled before
+// MorgTweaker ran) falls back to writing the known OFF state via Apply(off=false),
+// so the rollback still reverts a known registry value instead of a silent no-op.
+func TestRollbackNoBackupAppliesOffState(t *testing.T) {
 	store := backup.NewAt(filepath.Join(t.TempDir(), "b.json"))
 	e := newTestEngine(store, nil)
+	applied := true // sentinel: the Off fallback must set this to false via Apply(false)
+	var applyCount int
 	var restored bool
-	tw := core.Tweak{ID: "t.none", Actions: []core.Action{&fakeAction{state: core.PointOn, restored: &restored}}}
+	tw := core.Tweak{ID: "t.none", Actions: []core.Action{
+		&fakeAction{state: core.PointOn, applied: &applied, applyCount: &applyCount, restored: &restored},
+	}}
 
 	// no Apply → no backup recorded
 	errs := e.Rollback(tw)
@@ -383,7 +391,10 @@ func TestRollbackSkipsUnsnapshottedActions(t *testing.T) {
 		t.Fatalf("Rollback with no backups should not error, got %v", errs)
 	}
 	if restored {
-		t.Error("action with no backup must not be restored")
+		t.Error("no backup → Restore must NOT be called (nothing to restore)")
+	}
+	if applyCount != 1 || applied {
+		t.Errorf("no backup → fallback must Apply(off=false) once; applyCount=%d applied=%v", applyCount, applied)
 	}
 }
 
