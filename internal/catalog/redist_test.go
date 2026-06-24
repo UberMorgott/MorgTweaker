@@ -8,10 +8,26 @@ import (
 	"morgtweaker/internal/core"
 )
 
-// is2022 reports whether id is one of the four evergreen 2015-2022 children whose
-// download is Authenticode-verified (no SHA256 pin).
-func is2022(id string) bool {
-	return id == "prep.vcredist.vc2022_x64" || id == "prep.vcredist.vc2022_x86"
+// isAuthenticode reports whether id is one of the four children whose download is
+// Authenticode-verified with NO SHA256 pin: the 2015-2022 evergreen aka.ms
+// redirects and the 2013 aka.ms evergreen permalinks.
+func isAuthenticode(id string) bool {
+	return id == "prep.vcredist.vc2022_x64" || id == "prep.vcredist.vc2022_x86" ||
+		id == "prep.vcredist.vc2013_x64" || id == "prep.vcredist.vc2013_x86"
+}
+
+// isHex64 reports whether s is exactly 64 lowercase-hex characters (a valid
+// SHA256 pin).
+func isHex64(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for _, c := range s {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			return false
+		}
+	}
+	return true
 }
 
 // findChild returns the redistParent child with the given ID (fatal if absent).
@@ -77,11 +93,11 @@ func TestRedistParentRegisteredUnderPrep(t *testing.T) {
 	}
 }
 
-// TestRedistVerifyModeInvariant is the fail-closed verify-mode guard (security
-// critical). Across all 12 children: the two 2022 children are evergreen
-// Authenticode-verified with NO SHA256 pin; every legacy child must be in
-// VerifySHA256 mode with a SHA256 that is NOT a valid 64-hex digest, so it CANNOT
-// run an installer before Task 7 grounds a real pin. AcceptExit and Elev are
+// TestRedistVerifyModeInvariant is the verify-mode guard (security critical).
+// Across all 12 children: the four Authenticode children (2015-2022 + 2013, all
+// aka.ms evergreen) are Authenticode-verified with NO SHA256 pin; every
+// SHA-pinned legacy child (2005/2008/2010/2012) must be in VerifySHA256 mode with
+// a VALID 64-lowercase-hex digest (real grounded pin). AcceptExit and Elev are
 // asserted for every child.
 func TestRedistVerifyModeInvariant(t *testing.T) {
 	wantAccept := []int{0, 3010, 1638, 1641}
@@ -99,7 +115,7 @@ func TestRedistVerifyModeInvariant(t *testing.T) {
 			t.Errorf("child %q: AcceptExit = %v, want %v", ch.ID, di.AcceptExit, wantAccept)
 		}
 
-		if is2022(ch.ID) {
+		if isAuthenticode(ch.ID) {
 			if di.Verify != action.VerifyAuthenticodeMicrosoft {
 				t.Errorf("child %q: Verify = %v, want VerifyAuthenticodeMicrosoft", ch.ID, di.Verify)
 			}
@@ -109,12 +125,12 @@ func TestRedistVerifyModeInvariant(t *testing.T) {
 			continue
 		}
 
-		// Legacy child: must be fail-closed until Task 7 grounds a real pin.
+		// SHA-pinned legacy child: must carry a real, valid 64-lowercase-hex pin.
 		if di.Verify != action.VerifySHA256 {
 			t.Errorf("legacy child %q: Verify = %v, want VerifySHA256", ch.ID, di.Verify)
 		}
-		if len(di.SHA256) == 64 {
-			t.Errorf("legacy child %q: SHA256 %q has 64 chars — must NOT be a valid pin (fail-closed) before Task 7", ch.ID, di.SHA256)
+		if !isHex64(di.SHA256) {
+			t.Errorf("legacy child %q: SHA256 %q must be a valid 64 lowercase-hex pin", ch.ID, di.SHA256)
 		}
 	}
 }
@@ -123,8 +139,19 @@ func TestRedistVerifyModeInvariant(t *testing.T) {
 // view (x86 lives ONLY under WOW6432Node), each version family the correct key
 // path, and 2005/2008 use RegPresent on the MSI Uninstall key.
 func TestRedistDetectViewPerArch(t *testing.T) {
-	// 2013 x64 — VC\Runtimes, 64-bit view.
-	rs := mustRegSet(t, childDI(t, findChild(t, "prep.vcredist.vc2013_x64")).Detect, "vc2013_x64")
+	// 2022 x64 — the ONLY native-64 runtime: VC\Runtimes, 14.0, ViewDefault64.
+	// Locks the distinction from the legacy x64 keys which live under WOW6432Node.
+	rs := mustRegSet(t, childDI(t, findChild(t, "prep.vcredist.vc2022_x64")).Detect, "vc2022_x64")
+	if rs.Path != `SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64` {
+		t.Errorf("vc2022_x64 Detect.Path = %q", rs.Path)
+	}
+	if rs.View != action.ViewDefault64 {
+		t.Errorf("vc2022_x64 Detect.View = %v, want ViewDefault64 (native 64-bit)", rs.View)
+	}
+
+	// 2013 x64 — VC\Runtimes; on 64-bit Windows this key lives under WOW6432Node
+	// for x64 too, so the view MUST be ViewWow6432 (grounded correction).
+	rs = mustRegSet(t, childDI(t, findChild(t, "prep.vcredist.vc2013_x64")).Detect, "vc2013_x64")
 	if rs.Path != `SOFTWARE\Microsoft\VisualStudio\12.0\VC\Runtimes\x64` {
 		t.Errorf("vc2013_x64 Detect.Path = %q", rs.Path)
 	}
@@ -134,11 +161,11 @@ func TestRedistDetectViewPerArch(t *testing.T) {
 	if rs.Kind != action.KindDword {
 		t.Errorf("vc2013_x64 Detect.Kind = %v, want KindDword", rs.Kind)
 	}
-	if rs.View != action.ViewDefault64 {
-		t.Errorf("vc2013_x64 Detect.View = %v, want ViewDefault64", rs.View)
+	if rs.View != action.ViewWow6432 {
+		t.Errorf("vc2013_x64 Detect.View = %v, want ViewWow6432 (legacy x64 keys live under WOW6432Node)", rs.View)
 	}
 
-	// 2013 x86 — same family, but MUST read the 32-bit WOW6432Node view.
+	// 2013 x86 — same family, also the 32-bit WOW6432Node view.
 	rs = mustRegSet(t, childDI(t, findChild(t, "prep.vcredist.vc2013_x86")).Detect, "vc2013_x86")
 	if rs.View != action.ViewWow6432 {
 		t.Errorf("vc2013_x86 Detect.View = %v, want ViewWow6432 (BUG-1: x86 reads WOW6432Node)", rs.View)
@@ -147,13 +174,13 @@ func TestRedistDetectViewPerArch(t *testing.T) {
 		t.Errorf("vc2013_x86 Detect.Path = %q, want suffix \\12.0\\VC\\Runtimes\\x86", rs.Path)
 	}
 
-	// 2010 x64 — VCRedist (NOT Runtimes), 64-bit view.
+	// 2010 x64 — VCRedist (NOT Runtimes); also WOW6432Node on 64-bit Windows.
 	rs = mustRegSet(t, childDI(t, findChild(t, "prep.vcredist.vc2010_x64")).Detect, "vc2010_x64")
 	if !strings.Contains(rs.Path, `\10.0\VC\VCRedist\x64`) {
 		t.Errorf("vc2010_x64 Detect.Path = %q, want to contain \\10.0\\VC\\VCRedist\\x64", rs.Path)
 	}
-	if rs.View != action.ViewDefault64 {
-		t.Errorf("vc2010_x64 Detect.View = %v, want ViewDefault64", rs.View)
+	if rs.View != action.ViewWow6432 {
+		t.Errorf("vc2010_x64 Detect.View = %v, want ViewWow6432 (legacy x64 keys live under WOW6432Node)", rs.View)
 	}
 
 	// 2008 x86 — RegPresent on the MSI Uninstall key, 32-bit view.
@@ -173,6 +200,43 @@ func TestRedistDetectViewPerArch(t *testing.T) {
 	if rp.View != action.ViewDefault64 {
 		t.Errorf("vc2008_x64 Detect.View = %v, want ViewDefault64", rp.View)
 	}
+}
+
+// TestRedistArgsPerVersion guards the grounded silent-arg correction: the legacy
+// installers do NOT all take "/install /quiet /norestart".
+func TestRedistArgsPerVersion(t *testing.T) {
+	cases := []struct {
+		id   string
+		want []string
+	}{
+		{"prep.vcredist.vc2005_x64", []string{"/Q"}},
+		{"prep.vcredist.vc2005_x86", []string{"/Q"}},
+		{"prep.vcredist.vc2008_x64", []string{"/q"}},
+		{"prep.vcredist.vc2008_x86", []string{"/q"}},
+		{"prep.vcredist.vc2010_x64", []string{"/quiet", "/norestart"}},
+		{"prep.vcredist.vc2012_x86", []string{"/quiet", "/norestart"}},
+		{"prep.vcredist.vc2013_x64", []string{"/quiet", "/norestart"}},
+		{"prep.vcredist.vc2022_x64", []string{"/install", "/quiet", "/norestart"}},
+	}
+	for _, c := range cases {
+		di := childDI(t, findChild(t, c.id))
+		if !equalStrSlice(di.Args, c.want) {
+			t.Errorf("%s Args = %v, want %v", c.id, di.Args, c.want)
+		}
+	}
+}
+
+// equalStrSlice reports whether a and b have identical elements in order.
+func equalStrSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // mustRegSet type-asserts a Detect to action.RegSet (fatal otherwise).
