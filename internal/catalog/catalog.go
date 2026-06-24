@@ -28,5 +28,6 @@ func Build() core.Catalog {
 		{ID: "prep", Name: core.I18n{RU: "Подготовка", EN: "Prep"}, Tweaks: prep(tc)},
 		{ID: "explorer", Name: core.I18n{RU: "Проводник", EN: "Explorer"}, Tweaks: explorer},
 		{ID: "privacy", Name: core.I18n{RU: "Приватность", EN: "Privacy"}, Tweaks: privacy},
+		{ID: "apps", Name: core.I18n{RU: "Программы", EN: "Programs"}, Tweaks: apps()},
 	}
 }
