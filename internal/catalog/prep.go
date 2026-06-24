@@ -62,11 +62,32 @@ func prep(tc *action.TamperCache) []core.Tweak {
 			Desc:      core.I18n{RU: "Отключить уведомления Центра безопасности Windows.", EN: "Turn off Windows Security Center notifications."},
 			Elevation: core.ElevAdmin, Reboot: true,
 			// v1: Off=nil -> OffAbsent.
-			Actions: []core.Action{action.RegSet{
-				Root:  registry.LOCAL_MACHINE,
-				Path:  `SOFTWARE\Policies\Microsoft\Windows Defender Security Center\Notifications`,
-				Value: "DisableNotifications", Kind: action.KindDword, On: uint64(1), OffAbsent: true, Elev: core.ElevAdmin,
-			}},
+			Actions: []core.Action{
+				// Modern Win10/11 surface.
+				action.RegSet{
+					Root:  registry.LOCAL_MACHINE,
+					Path:  `SOFTWARE\Policies\Microsoft\Windows Defender Security Center\Notifications`,
+					Value: "DisableNotifications", Kind: action.KindDword, On: uint64(1), OffAbsent: true, Elev: core.ElevAdmin,
+				},
+				// Legacy Win8.1-and-older Security Center notification toggles. These
+				// *DisableNotify=1 values silence only the category notification, not the
+				// protection state (write-all strategy; inert on Win10/11 where the key is gone).
+				action.RegSet{
+					Root:  registry.LOCAL_MACHINE,
+					Path:  `SOFTWARE\Microsoft\Security Center`,
+					Value: "AntiVirusDisableNotify", Kind: action.KindDword, On: uint64(1), OffAbsent: true, Elev: core.ElevAdmin,
+				},
+				action.RegSet{
+					Root:  registry.LOCAL_MACHINE,
+					Path:  `SOFTWARE\Microsoft\Security Center`,
+					Value: "FirewallDisableNotify", Kind: action.KindDword, On: uint64(1), OffAbsent: true, Elev: core.ElevAdmin,
+				},
+				action.RegSet{
+					Root:  registry.LOCAL_MACHINE,
+					Path:  `SOFTWARE\Microsoft\Security Center`,
+					Value: "UpdatesDisableNotify", Kind: action.KindDword, On: uint64(1), OffAbsent: true, Elev: core.ElevAdmin,
+				},
+			},
 		},
 		redistParent(),
 	}

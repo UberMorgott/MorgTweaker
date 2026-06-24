@@ -43,6 +43,53 @@ func TestSmartScreenModernPolicy(t *testing.T) {
 	}
 }
 
+// TestSeccenterLegacyWin81Notify pins the three legacy (Win8.1-and-older)
+// Security Center notification toggles onto prep.disable_seccenter_notify, while
+// confirming the modern Win10/11 policy action is still present. The legacy keys
+// live under SOFTWARE\Microsoft\Security Center and are removed on Win10/11, so
+// the write-all strategy leaves them inert there.
+func TestSeccenterLegacyWin81Notify(t *testing.T) {
+	tw, ok := Build().Find("prep.disable_seccenter_notify")
+	if !ok {
+		t.Fatal("prep.disable_seccenter_notify missing")
+	}
+
+	// Collect legacy Security Center RegSet values keyed by Value name.
+	const legacyPath = `SOFTWARE\Microsoft\Security Center`
+	legacy := map[string]action.RegSet{}
+	modernFound := false
+	for _, a := range tw.Actions {
+		rs, ok := a.(action.RegSet)
+		if !ok {
+			continue
+		}
+		if rs.Path == legacyPath {
+			legacy[rs.Value] = rs
+		}
+		if rs.Path == `SOFTWARE\Policies\Microsoft\Windows Defender Security Center\Notifications` && rs.Value == "DisableNotifications" {
+			modernFound = true
+		}
+	}
+
+	for _, name := range []string{"AntiVirusDisableNotify", "FirewallDisableNotify", "UpdatesDisableNotify"} {
+		rs, ok := legacy[name]
+		if !ok {
+			t.Errorf("missing legacy Security Center action for value %q", name)
+			continue
+		}
+		if rs.On != uint64(1) {
+			t.Errorf("legacy %q On = %v want uint64(1)", name, rs.On)
+		}
+		if !rs.OffAbsent {
+			t.Errorf("legacy %q must have OffAbsent=true", name)
+		}
+	}
+
+	if !modernFound {
+		t.Error("modern Win10/11 action (Windows Defender Security Center\\Notifications DisableNotifications) must remain present")
+	}
+}
+
 // TestPauseUpdateName pins the corrected, non-overpromising name.
 func TestPauseUpdateName(t *testing.T) {
 	tw, ok := Build().Find("prep.pause_update")
